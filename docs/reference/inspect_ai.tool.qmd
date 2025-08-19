@@ -6,9 +6,22 @@ title: "inspect_ai.tool"
 
 ### bash
 ### python
-### web_search
+### bash_session
+### text_editor
 ### web_browser
 ### computer
+### web_search
+### think
+
+## MCP
+
+### mcp_connection
+### mcp_server_stdio
+### mcp_server_http
+### mcp_server_sandbox
+### mcp_server_sse
+### mcp_tools
+### MCPServer
 
 ## Dynamic 
 
@@ -26,7 +39,7 @@ title: "inspect_ai.tool"
 ### ToolInfo
 ### ToolParams
 ### ToolParam
-### JSONType
+### ToolSource
 
 ## Decorator
 

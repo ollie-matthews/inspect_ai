@@ -1,19 +1,28 @@
-import asyncio
+import functools
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable, Literal, cast
+from typing import Any, Callable, Literal
 
-from inspect_ai._display import display
+import anyio
+
+from inspect_ai._display import display as display_manager
+from inspect_ai._eval.context import init_task_context
 from inspect_ai._eval.loader import scorer_from_spec
-from inspect_ai._util.platform import platform_init
+from inspect_ai._util._async import configured_async_backend, run_coroutine, tg_collect
+from inspect_ai._util.platform import platform_init, running_in_notebook
 from inspect_ai._util.registry import registry_create, registry_unqualified_name
 from inspect_ai.log import (
     EvalLog,
+    ScoreEvent,
 )
-from inspect_ai.log._log import EvalMetricDefinition
+from inspect_ai.log._log import EvalMetricDefinition, EvalSample
+from inspect_ai.log._model import model_roles_config_to_model_roles
+from inspect_ai.log._transcript import Event, Transcript, init_transcript
+from inspect_ai.log._tree import SpanNode, event_sequence, event_tree, walk_node_spans
 from inspect_ai.model import ModelName
+from inspect_ai.model._model import get_model
 from inspect_ai.scorer import Metric, Scorer, Target
-from inspect_ai.scorer._metric import SampleScore
+from inspect_ai.scorer._metric import SampleScore, Score
 from inspect_ai.scorer._reducer import (
     ScoreReducer,
     ScoreReducers,
@@ -22,6 +31,13 @@ from inspect_ai.scorer._reducer import (
 )
 from inspect_ai.scorer._scorer import ScorerSpec, unique_scorer_name
 from inspect_ai.solver import TaskState
+from inspect_ai.util._display import (
+    DisplayType,
+    display_type_initialized,
+    init_display_type,
+)
+from inspect_ai.util._span import span
+from inspect_ai.util._store import init_subtask_store
 
 from .task.results import eval_results
 
@@ -33,6 +49,7 @@ def score(
     scorers: Scorer | list[Scorer],
     epochs_reducer: ScoreReducers | None = None,
     action: ScoreAction | None = None,
+    display: DisplayType | None = None,
 ) -> EvalLog:
     """Score an evaluation log.
 
@@ -43,6 +60,7 @@ def score(
            Reducer function(s) for aggregating scores in each sample.
            Defaults to previously used reducer(s).
        action: Whether to append or overwrite this score
+       display: Progress/status display
 
     Returns:
        Log with scores yielded by scorer.
@@ -50,10 +68,84 @@ def score(
     # standard platform init for top level entry points
     platform_init()
 
+    # initialize display type
+    init_display_type(display)
+
     # resolve scorers into a list
     scorers = [scorers] if isinstance(scorers, Scorer) else scorers
 
-    return asyncio.run(score_async(log, scorers, epochs_reducer, action))
+    if running_in_notebook():
+        return run_coroutine(score_async(log, scorers, epochs_reducer, action))
+    else:
+        return anyio.run(
+            score_async,
+            log,
+            scorers,
+            epochs_reducer,
+            action,
+            backend=configured_async_backend(),
+        )
+
+
+def _get_updated_scores(
+    sample: EvalSample, scores: dict[str, SampleScore], action: ScoreAction
+) -> dict[str, Score]:
+    if action == "overwrite":
+        return {k: v.score for k, v in scores.items()}
+
+    updated_scores: dict[str, Score] = {**(sample.scores or {})}
+    for key, score in scores.items():
+        new_key = key
+        count = 0
+        while new_key in updated_scores:
+            # This key already exists, dedupe its name
+            count = count + 1
+            new_key = f"{key}-{count}"
+
+        updated_scores[new_key] = score.score
+
+    return updated_scores
+
+
+def _get_updated_events(
+    sample: EvalSample, transcript: Transcript, action: ScoreAction
+) -> list[Event]:
+    final_scorers_node: SpanNode | None = None
+    sample_event_tree = event_tree(sample.events)
+    for node in walk_node_spans(sample_event_tree):
+        if node.type == "scorers" and node.name == "scorers":
+            final_scorers_node = node
+
+    if final_scorers_node is None:
+        return [*sample.events, *transcript.events]
+
+    (new_scorers_tree,) = event_tree(transcript.events)
+    assert isinstance(new_scorers_tree, SpanNode)
+    if action == "append":
+        # Add the new score nodes to the existing scorer node's children
+        for child in new_scorers_tree.children:
+            if isinstance(child, SpanNode):
+                child.parent_id = final_scorers_node.id
+        final_scorers_node.children.extend(new_scorers_tree.children)
+    else:
+        # Entirely replace the existing scorer node and its children, which will
+        # also mean updating the timestamps associated with the scorers span
+        if final_scorers_node.parent_id is None:
+            siblings = sample_event_tree
+        else:
+            scorer_insert_point = None
+            for node in walk_node_spans(sample_event_tree):
+                if node.id == final_scorers_node.parent_id:
+                    scorer_insert_point = node
+                    break
+
+            assert scorer_insert_point is not None
+            siblings = scorer_insert_point.children
+
+        idx_scorer_event = siblings.index(final_scorers_node)
+        siblings[idx_scorer_event] = new_scorers_tree
+        new_scorers_tree.parent_id = final_scorers_node.parent_id
+    return list(event_sequence(sample_event_tree))
 
 
 async def score_async(
@@ -61,6 +153,7 @@ async def score_async(
     scorers: list[Scorer],
     epochs_reducer: ScoreReducers | None = None,
     action: ScoreAction | None = None,
+    display: DisplayType | None = None,
 ) -> EvalLog:
     """Score an evaluation log.
 
@@ -71,12 +164,15 @@ async def score_async(
          Reducer function(s) for aggregating scores in each sample.
          Defaults to previously used reducer(s).
        action: Whether to append or overwrite this score
-
-
+       display: Progress/status display
 
     Returns:
        Log with scores yielded by scorer.
     """
+    # init display if necessary
+    if not display_type_initialized():
+        init_display_type(display or "plain")
+
     # deepcopy so we don't mutate the passed log
     log = deepcopy(log)
 
@@ -97,40 +193,33 @@ async def score_async(
             output=sample.output,
             completed=True,
             metadata=sample.metadata,
+            store=sample.store,
         )
         for sample in log.samples
     ]
-    with display().progress(total=len(states)) as p:
+    with display_manager().progress(total=len(states)) as p:
 
         def progress() -> None:
             p.update(1)
 
-        tasks = [
-            run_score_task(state, Target(sample.target), scorers, progress)
-            for (sample, state) in zip(log.samples, states)
-        ]
-
         # do scoring
-        scores: list[dict[str, SampleScore]] = await asyncio.gather(*tasks)
+        scores_and_events: list[
+            tuple[dict[str, SampleScore], Transcript]
+        ] = await tg_collect(
+            [
+                functools.partial(
+                    run_score_task, log, state, Target(sample.target), scorers, progress
+                )
+                for (sample, state) in zip(log.samples, states)
+            ]
+        )
 
         # write them back (gather ensures that they come back in the same order)
-        for index, score in enumerate(scores):
-            if action == "overwrite":
-                log.samples[index].scores = {k: v.score for k, v in score.items()}
-            else:
-                existing_scores = log.samples[index].scores or {}
-                new_scores = {k: v.score for k, v in score.items()}
-
-                for key, value in new_scores.items():
-                    if key not in existing_scores:
-                        existing_scores[key] = value
-                    else:
-                        # This key already exists, dedupe its name
-                        count = 1
-                        while f"{key}-{count}" in existing_scores.keys():
-                            count = count + 1
-                        existing_scores[f"{key}-{count}"] = value
-                log.samples[index].scores = existing_scores
+        action = action or "append"
+        for idx_sample, (scores, transcript) in enumerate(scores_and_events):
+            sample = log.samples[idx_sample]
+            sample.scores = _get_updated_scores(sample, scores, action=action)
+            sample.events = _get_updated_events(sample, transcript, action=action)
 
         # collect metrics from EvalLog (they may overlap w/ the scorer metrics,
         # that will be taken care of in eval_results)
@@ -145,7 +234,11 @@ async def score_async(
 
         # compute metrics
         log.results, log.reductions = eval_results(
-            len(log.samples), scores, epochs_reducer, scorers, log_metrics
+            len(log.samples),
+            [scores for (scores, _) in scores_and_events],
+            epochs_reducer,
+            scorers,
+            log_metrics,
         )
 
     return log
@@ -169,7 +262,7 @@ async def task_score(
         raise ValueError("There are no samples to score in the log.")
 
     task_name = log.eval.task
-    display().print(f"\nScoring {task_name} ({len(log.samples)} samples)")
+    display_manager().print(f"\nScoring {task_name} ({len(log.samples)} samples)")
 
     # perform scoring
     log = await score_async(log=log, scorers=scorers, action=action)
@@ -203,25 +296,49 @@ async def task_score(
 
 
 async def run_score_task(
+    log: EvalLog,
     state: TaskState,
     target: Target,
     scorers: list[Scorer],
     progress: Callable[..., None],
-) -> dict[str, SampleScore]:
-    results: dict[str, SampleScore] = {}
-    for scorer in scorers:
-        result = await scorer(state, target)
-        scorer_name = unique_scorer_name(scorer, list(results.keys()))
+) -> tuple[dict[str, SampleScore], Transcript]:
+    # get the model then initialize the async context
+    model = get_model(
+        model=log.eval.model,
+        config=log.plan.config.merge(log.eval.model_generate_config),
+        **log.eval.model_args,
+    )
 
-        results[scorer_name] = SampleScore(
-            score=result,
-            sample_id=state.sample_id,
-            sample_metadata=state.metadata,
-            scorer=registry_unqualified_name(scorer),
-        )
+    # get the model roles
+    model_roles = model_roles_config_to_model_roles(log.eval.model_roles)
+
+    # initialize active model and store
+    init_task_context(model, model_roles)
+    init_subtask_store(state.store)
+    transcript = Transcript()
+    init_transcript(transcript)
+
+    results: dict[str, SampleScore] = {}
+    async with span(name="scorers"):
+        for scorer in scorers:
+            scorer_name = unique_scorer_name(scorer, list(results.keys()))
+            async with span(name=scorer_name, type="scorer"):
+                result = await scorer(state, target)
+                results[scorer_name] = SampleScore(
+                    score=result,
+                    sample_id=state.sample_id,
+                    sample_metadata=state.metadata,
+                    scorer=registry_unqualified_name(scorer),
+                )
+                transcript._event(
+                    ScoreEvent(
+                        score=result,
+                        target=target.target,
+                    )
+                )
 
     progress()
-    return results
+    return results, transcript
 
 
 def metrics_from_log(log: EvalLog) -> list[Metric] | dict[str, list[Metric]] | None:
@@ -238,9 +355,7 @@ def metrics_from_log(log: EvalLog) -> list[Metric] | dict[str, list[Metric]] | N
 
 
 def metric_from_log(metric: EvalMetricDefinition) -> Metric:
-    return cast(
-        Metric, registry_create("metric", metric.name, **(metric.options or {}))
-    )
+    return registry_create("metric", metric.name, **(metric.options or {}))
 
 
 def reducers_from_log(log: EvalLog) -> list[ScoreReducer] | None:

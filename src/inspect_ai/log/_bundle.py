@@ -10,7 +10,7 @@ from typing import Any, Callable, Iterator
 from inspect_ai._util.error import PrerequisiteError
 from inspect_ai._util.file import filesystem
 
-from ._file import log_files_from_ls, write_log_dir_manifest
+from ._file import log_files_from_ls, write_log_listing
 
 # INSPECT_VIEW_BUNDLE_OUT_DIR
 
@@ -72,8 +72,8 @@ def bundle_log_dir(
             # Copy the logs to the log dir
             copy_log_files(log_dir, view_logs_dir, p.update, fs_options)
 
-            # Always regenerate the manifest
-            write_log_dir_manifest(view_logs_dir)
+            # Always write the log overviews
+            write_log_listing(view_logs_dir)
             p.update(25)
 
             # update the index html to embed the log_dir
@@ -146,7 +146,7 @@ def copy_log_files(
     log_fs = filesystem(log_dir, fs_options)
     if log_fs.exists(log_dir):
         eval_logs = log_files_from_ls(
-            log_fs.ls(log_dir, recursive=True), ["json", "eval"], True
+            log_fs.ls(log_dir, recursive=True), ["json", "eval"], False
         )
         if len(eval_logs) == 0:
             raise PrerequisiteError(
@@ -201,8 +201,10 @@ def move_output(
                 output_fs.mkdir(dir_path)
             tick()
 
-            # Copy the files
-            for working_file in files:
+            # Copy the files, preserving relative mtime ordering
+            for _, working_file in sorted(
+                (os.stat(os.path.join(root, f)).st_mtime, f) for f in files
+            ):
                 target_path = (
                     os.path.join(relative_dir, working_file)
                     if relative_dir != "."

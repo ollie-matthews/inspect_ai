@@ -1,9 +1,12 @@
 from logging import getLogger
 from typing import Any, Literal, Type, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, JsonValue, model_validator
+from shortuuid import uuid
 
-from inspect_ai._util.content import Content, ContentText
+from inspect_ai._util.constants import DESERIALIZING
+from inspect_ai._util.content import Content, ContentReasoning, ContentText
+from inspect_ai._util.metadata import MT, metadata_as
 from inspect_ai.tool import ToolCall
 from inspect_ai.tool._tool_call import ToolCallError
 
@@ -15,14 +18,44 @@ logger = getLogger(__name__)
 class ChatMessageBase(BaseModel):
     """Base class for chat messages."""
 
-    role: Literal["system", "user", "assistant", "tool"]
-    """Conversation role"""
+    id: str | None = Field(default=None)
+    """Unique identifer for message."""
 
     content: str | list[Content]
     """Content (simple string or list of content objects)"""
 
     source: Literal["input", "generate"] | None = Field(default=None)
     """Source of message."""
+
+    metadata: dict[str, Any] | None = Field(default=None)
+    """Additional message metadata."""
+
+    def metadata_as(self, metadata_cls: Type[MT]) -> MT:
+        """Metadata as a Pydantic model.
+
+        Args:
+           metadata_cls: BaseModel derived class.
+
+        Returns:
+           BaseModel: Instance of metadata_cls.
+        """
+        if self.metadata is None:
+            raise ValueError("ChatMessage does not have metadata")
+
+        return metadata_as(self.metadata, metadata_cls)
+
+    internal: JsonValue | None = Field(default=None)
+    """Model provider specific payload - typically used to aid transformation back to model types."""
+
+    def model_post_init(self, __context: Any) -> None:
+        # check if deserializing
+        is_deserializing = isinstance(__context, dict) and __context.get(
+            DESERIALIZING, False
+        )
+
+        # Generate ID if needed and not deserializing
+        if self.id is None and not is_deserializing:
+            self.id = uuid()
 
     @property
     def text(self) -> str:
@@ -64,7 +97,7 @@ class ChatMessageBase(BaseModel):
             self.content = text
         else:
             all_other = [content for content in self.content if content.type != "text"]
-            self.content = [ContentText(text=text)] + all_other
+            self.content = all_other + [ContentText(text=text)]
 
 
 class ChatMessageSystem(ChatMessageBase):
@@ -93,8 +126,8 @@ class ChatMessageAssistant(ChatMessageBase):
     tool_calls: list[ToolCall] | None = Field(default=None)
     """Tool calls made by the model."""
 
-    reasoning: str | None = Field(default=None)
-    """Reasoning content."""
+    model: str | None = Field(default=None)
+    """Model used to generate assistant message."""
 
     # Some OpenAI compatible REST endpoints include reasoning as a field alongside
     # content, however since this field doesn't exist in the OpenAI interface,
@@ -110,12 +143,30 @@ class ChatMessageAssistant(ChatMessageBase):
     @classmethod
     def extract_reasoning(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            # cleave apart <think> blocks
             content = data.get("content", None)
             if isinstance(content, str):
-                parsed = parse_content_with_reasoning(content)
-                if parsed:
-                    data["reasoning"] = parsed.reasoning
-                    data["content"] = parsed.content
+                content_text, reasoning = parse_content_with_reasoning(content)
+                if reasoning:
+                    data["content"] = [
+                        ContentReasoning(reasoning=reasoning.reasoning),
+                        ContentText(text=content_text),
+                    ]
+            # migrate messages that has explicit 'reasoning' field
+            # (which was our original representation of reasoning)
+            reasoning = data.get("reasoning", None)
+            if isinstance(reasoning, str):
+                # ensure that content is a list
+                content = data.get("content", None)
+                if content is None:
+                    data["content"] = []
+                elif isinstance(content, str):
+                    data["content"] = [ContentText(text=content)]
+                elif not isinstance(content, list):
+                    data["content"] = []
+                data["content"].insert(0, ContentReasoning(reasoning=reasoning))
+
+                del data["reasoning"]
         return data
 
 

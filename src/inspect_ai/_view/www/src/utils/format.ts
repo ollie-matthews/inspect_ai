@@ -3,7 +3,7 @@ import {
   ChatMessageSystem,
   ChatMessageTool,
   ChatMessageUser,
-} from "../types/log";
+} from "../@types/log";
 
 /**
  * Converts an array or a single value to a comma-separated string.
@@ -77,35 +77,38 @@ export const formatDataset = (
  */
 export const formatTime = (seconds: number): string => {
   if (seconds < 60) {
-    return `${seconds} sec`;
+    return `${formatPrettyDecimal(seconds, 1)} sec`;
   } else if (seconds < 60 * 60) {
-    return `${Math.floor(seconds / 60)} min ${seconds % 60} sec`;
+    return `${Math.floor(seconds / 60)} min ${Math.floor(seconds % 60)} sec`;
   } else if (seconds < 60 * 60 * 24) {
     const hours = Math.floor(seconds / (60 * 60));
     const minutes = Math.floor((seconds % (60 * 60)) / 60);
     const remainingSeconds = seconds % 60;
-    return `${hours} hr ${minutes} min ${remainingSeconds} sec`;
+    return `${hours} hr ${minutes} min ${Math.floor(remainingSeconds)} sec`;
   } else {
     const days = Math.floor(seconds / (60 * 60 * 24));
     const hours = Math.floor((seconds % (60 * 60 * 24)) / (60 * 60));
     const minutes = Math.floor((seconds % (60 * 60)) / 60);
     const remainingSeconds = seconds % 60;
-    return `${days} days ${hours} hr ${minutes} min ${remainingSeconds} sec`;
+    return `${days} days ${hours} hr ${minutes} min ${Math.floor(remainingSeconds)} sec`;
   }
 };
 
 /**
  * Formats a number to a string with specific decimal places for prettiness.
  */
-export function formatPrettyDecimal(num: number): string {
+export function formatPrettyDecimal(
+  num: number,
+  maxDecimals: number = 3,
+): string {
   const numDecimalPlaces = num.toString().includes(".")
     ? num.toString().split(".")[1].length
     : 0;
 
   if (numDecimalPlaces === 0) {
     return num.toFixed(1);
-  } else if (numDecimalPlaces > 3) {
-    return num.toFixed(3);
+  } else if (numDecimalPlaces > maxDecimals) {
+    return num.toFixed(maxDecimals);
   } else {
     return num.toString();
   }
@@ -134,9 +137,15 @@ export function formatDecimalNoTrailingZeroes(num: number): string {
  * Converts a string to title case.
  */
 export function toTitleCase(str: string): string {
+  if (!str) {
+    return str;
+  }
+
   return str
     .split(" ")
-    .map((w) => w[0].toUpperCase() + w.substr(1).toLowerCase())
+    .map((w) =>
+      w.length > 0 ? w[0].toUpperCase() + w.substr(1).toLowerCase() : w,
+    )
     .join(" ");
 }
 

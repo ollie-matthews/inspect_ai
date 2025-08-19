@@ -1,6 +1,7 @@
 import math
 import os
 import tempfile
+from datetime import datetime, timezone
 
 import pytest
 from pydantic_core import PydanticSerializationError
@@ -11,6 +12,16 @@ from inspect_ai.dataset import Sample
 from inspect_ai.log import read_eval_log
 from inspect_ai.log._file import read_eval_log_sample, write_eval_log
 from inspect_ai.log._log import EvalLog
+from inspect_ai.log._transcript import (
+    ModelEvent,
+    SandboxEvent,
+    SubtaskEvent,
+    ToolEvent,
+)
+from inspect_ai.model import get_model
+from inspect_ai.model._generate_config import GenerateConfig
+from inspect_ai.model._model_output import ModelOutput
+from inspect_ai.scorer import exact
 from inspect_ai.solver import (
     Generate,
     TaskState,
@@ -93,11 +104,142 @@ def test_read_sample():
         assert sample.target == " Yes"
 
 
+def test_read_sample_by_uuid():
+    log_files = [
+        os.path.join("tests", "log", "test_eval_log", file)
+        for file in ["log_read_sample.json", "log_read_sample.eval"]
+    ]
+    for log_file in log_files:
+        sampleA = read_eval_log_sample(log_file, id=1, epoch=1)
+        sampleB = read_eval_log_sample(log_file, uuid=sampleA.uuid)
+        assert sampleA.id == sampleB.id
+        assert sampleA.epoch == sampleB.epoch
+        assert sampleA.uuid == sampleB.uuid
+        assert sampleA.input == sampleB.input
+
+
 def test_log_location():
     json_log_file = os.path.join("tests", "log", "test_eval_log", "log_formats.json")
     check_log_location(json_log_file)
     eval_log_file = os.path.join("tests", "log", "test_eval_log", "log_streaming.eval")
     check_log_location(eval_log_file)
+
+
+def test_can_round_trip_serialize_model_event():
+    original = ModelEvent(
+        model="model",
+        input=[],
+        tools=[],
+        tool_choice="auto",
+        config=GenerateConfig(),
+        output=ModelOutput(),
+        # Set timestamp to a timezone-aware datetime object because when serializing to
+        # JSON, the datetime is converted to a timezone-aware string.
+        # If we set the timestamp to a timezone-naive datetime object (default
+        # behaviour), the deserialized object will have a timezone-aware datetime object
+        # and the assert will fail.
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    serialized = original.model_dump_json()
+    deserialized = ModelEvent.model_validate_json(serialized)
+
+    assert original == deserialized
+
+
+def _inject_invalid_unicode_into_log(log: EvalLog) -> EvalLog:
+    # Ensure samples exist
+    assert log.samples is not None and len(log.samples) > 0
+    sample = log.samples[0]
+    # Inject invalid surrogate into the model output content
+    surrogate_input = "\udc00"
+    sample.output = ModelOutput.from_content(
+        model="mockllm/model",
+        content=f"This is a surrogate: {surrogate_input}",
+    )
+    # Sanity check the invalid content is present in the in-memory object
+    assert sample.output.choices[0].message.content == "This is a surrogate: \udc00"
+    return log
+
+
+def test_json_log_writer_handles_invalid_unicode_safely(tmp_path: str):
+    # Read a valid log, mutate it to include invalid unicode in model output
+    log_file = os.path.join("tests", "log", "test_eval_log", "log_formats.json")
+    log = read_eval_log(log_file)
+    log = _inject_invalid_unicode_into_log(log)
+
+    # Attempt to write as .json should raise due to unsafe serialization path
+    out_path = os.path.join(tmp_path, "bad_unicode_log.json")
+    write_eval_log(log, out_path)
+
+    # Read the log back in
+    roundtripped_log = read_eval_log(out_path)
+    assert roundtripped_log.samples and len(roundtripped_log.samples) > 0
+    assert (
+        roundtripped_log.samples[0].output.choices[0].message.content
+        == "This is a surrogate: \\udc00"
+    )
+
+
+def test_eval_log_writer_handles_invalid_unicode_safely(tmp_path: str):
+    # Read a valid log, mutate it to include invalid unicode in model output
+    log_file = os.path.join("tests", "log", "test_eval_log", "log_formats.json")
+    log = read_eval_log(log_file)
+    log = _inject_invalid_unicode_into_log(log)
+
+    # Attempt to write as .eval should raise due to unsafe serialization path
+    out_path = os.path.join(tmp_path, "bad_unicode_log.eval")
+    write_eval_log(log, out_path)
+
+    # Read the log back in
+    roundtripped_log = read_eval_log(out_path)
+    assert roundtripped_log.samples and len(roundtripped_log.samples) > 0
+    assert (
+        roundtripped_log.samples[0].output.choices[0].message.content
+        == "This is a surrogate: \\udc00"
+    )
+
+
+def test_can_round_trip_serialize_tool_event():
+    original = ToolEvent(
+        id="id", function="fn", arguments={}, timestamp=datetime.now(timezone.utc)
+    )
+
+    serialized = original.model_dump_json()
+    deserialized = ToolEvent.model_validate_json(serialized)
+
+    assert original == deserialized
+
+
+def test_can_round_trip_serialize_sandbox_event():
+    original = SandboxEvent(action="exec", timestamp=datetime.now(timezone.utc))
+
+    serialized = original.model_dump_json()
+    deserialized = SandboxEvent.model_validate_json(serialized)
+
+    assert original == deserialized
+
+
+def test_can_round_trip_serialize_subtask_event():
+    original = SubtaskEvent(name="name", input={}, timestamp=datetime.now(timezone.utc))
+
+    serialized = original.model_dump_json()
+    deserialized = SubtaskEvent.model_validate_json(serialized)
+
+    assert original == deserialized
+
+
+def test_can_load_log_with_all_tool_call_errors():
+    # Log file contains all supported tool call errors.
+    log_file = os.path.join("tests", "log", "test_eval_log", "log_tool_call_error.json")
+
+    read_eval_log(log_file)
+
+
+def test_log_provides_migrated_task_passed_args():
+    log_file = os.path.join("tests", "log", "test_eval_log", "log_tool_call_error.json")
+    log = read_eval_log(log_file)
+    assert log.eval.task_args_passed == {"foo": "bar"}
 
 
 def check_log_location(log_file: str):
@@ -113,3 +255,28 @@ def check_log_raises(log_file):
         read_log(log_file)
     with pytest.raises(ValueError):
         read_log(log_file, header_only=True)
+
+
+def test_unicode_surrogates_are_escaped():
+    task = Task(
+        dataset=[Sample(input="Say hello.", target="Hello")],
+        solver=generate(),
+        scorer=exact(),
+    )
+
+    [log] = eval(
+        tasks=task,
+        model=get_model(
+            "mockllm/model",
+            custom_outputs=[
+                ModelOutput.from_content(
+                    model="mockllm/model",
+                    content="\udc00\udc00\udc00",
+                )
+            ],
+        ),
+    )
+    assert log.status == "success"
+    sample = log.samples[0]
+    assert sample.output.message.text == "\\udc00\\udc00\\udc00"
+    assert sample.scores["exact"].answer == "\\udc00\\udc00\\udc00"

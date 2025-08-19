@@ -2,7 +2,7 @@ import os
 from typing import Literal
 
 from inspect_ai._util.error import PrerequisiteError
-from inspect_ai._util.file import copy_file, exists, filesystem
+from inspect_ai._util.file import exists, filesystem
 from inspect_ai.log._file import (
     log_files_from_ls,
     read_eval_log,
@@ -35,9 +35,10 @@ def convert_eval_logs(
         raise PrerequisiteError(f"Error: path '{path}' does not exist.")
 
     # normalise output dir and ensure it exists
+    output_fs = filesystem(output_dir)
     if output_dir.endswith(fs.sep):
         output_dir = output_dir[:-1]
-    fs.mkdir(output_dir, exist_ok=True)
+    output_fs.mkdir(output_dir, exist_ok=True)
 
     # convert a single file (input file is relative to the 'path')
     def convert_file(input_file: str) -> None:
@@ -56,7 +57,6 @@ def convert_eval_logs(
             target_dir = output_dir
             output_file_basename = os.path.basename(input_name)
 
-        output_fs = filesystem(target_dir)
         output_fs.mkdir(target_dir, exist_ok=True)
 
         # compute full output file and enforce overwrite
@@ -66,14 +66,9 @@ def convert_eval_logs(
                 "Output file {output_file} already exists (use --overwrite to overwrite existing files)"
             )
 
-        # if the input and output files have the same format just copy
-        if input_file.endswith(f".{to}"):
-            copy_file(input_file, output_file)
-
-        # otherwise do a full read/write
-        else:
-            log = read_eval_log(input_file)
-            write_eval_log(log, output_file)
+        # do a full read/write (normalized deprecated constructs and adds sample summaries)
+        log = read_eval_log(input_file)
+        write_eval_log(log, output_file)
 
     if fs.info(path).type == "file":
         convert_file(path)

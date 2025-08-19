@@ -1,14 +1,21 @@
-import asyncio
+from __future__ import annotations
+
+import concurrent
+import concurrent.futures
 import copy
 import functools
 import gc
 import json
 import os
+import time
+from concurrent.futures import Future
 from dataclasses import dataclass
+from logging import getLogger
 from queue import Empty, Queue
 from threading import Thread
 from typing import Any, Literal, Protocol, cast
 
+import anyio
 import numpy as np
 import torch  # type: ignore
 from torch import Tensor  # type: ignore
@@ -21,7 +28,14 @@ from transformers import (  # type: ignore
 from typing_extensions import override
 
 from inspect_ai._util.constants import DEFAULT_MAX_TOKENS
-from inspect_ai._util.content import ContentText
+from inspect_ai._util.content import (
+    ContentAudio,
+    ContentDocument,
+    ContentImage,
+    ContentText,
+    ContentVideo,
+)
+from inspect_ai._util.trace import trace_action
 from inspect_ai.tool import ToolChoice, ToolInfo
 
 from .._chat_message import ChatMessage, ChatMessageAssistant
@@ -36,6 +50,9 @@ from .._model_output import (
     TopLogprob,
 )
 from .util import ChatAPIHandler, HFHandler
+
+logger = getLogger(__name__)
+
 
 HF_TOKEN = "HF_TOKEN"
 
@@ -76,8 +93,10 @@ class HuggingFaceAPI(ModelAPI):
         self.batch_size = collect_model_arg("batch_size")
         self.chat_template = collect_model_arg("chat_template")
         self.tokenizer_call_args = collect_model_arg("tokenizer_call_args")
+        self.enable_thinking = collect_model_arg("enable_thinking")
         if self.tokenizer_call_args is None:
             self.tokenizer_call_args = {}
+        self.hidden_states = collect_model_arg("hidden_states")
 
         # device
         if device:
@@ -91,7 +110,7 @@ class HuggingFaceAPI(ModelAPI):
 
         # model
         if model_path:
-            self.model = AutoModelForCausalLM.from_pretrained(
+            self.model: Any = AutoModelForCausalLM.from_pretrained(
                 model_path, device_map=self.device, token=self.api_key, **model_args
             )
         else:
@@ -101,20 +120,20 @@ class HuggingFaceAPI(ModelAPI):
 
         # tokenizer
         if tokenizer:
-            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)  # type: ignore[no-untyped-call]
         elif model_path:
             if tokenizer_path:
-                self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+                self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)  # type: ignore[no-untyped-call]
             else:
-                self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+                self.tokenizer = AutoTokenizer.from_pretrained(model_path)  # type: ignore[no-untyped-call]
         else:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore[no-untyped-call]
         # LLMs generally don't have a pad token and we need one for batching
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
 
     @override
-    async def close(self) -> None:
+    def close(self) -> None:
         self.model = None
         self.tokenizer = None
         gc.collect()
@@ -155,6 +174,8 @@ class HuggingFaceAPI(ModelAPI):
             kwargs["top_k"] = config.top_k
         if config.logprobs is not None:
             kwargs["output_logits"] = config.logprobs
+        if self.hidden_states is not None:
+            kwargs["output_hidden_states"] = self.hidden_states
         if "return_dict_in_generate" in kwargs:
             assert kwargs["return_dict_in_generate"]
         if config.stop_seqs is not None:
@@ -196,7 +217,9 @@ class HuggingFaceAPI(ModelAPI):
 
         # construct choice
         choice = ChatCompletionChoice(
-            message=ChatMessageAssistant(content=response.output, source="generate"),
+            message=ChatMessageAssistant(
+                content=response.output, model=self.model_name, source="generate"
+            ),
             logprobs=(
                 Logprobs(content=final_logprobs) if final_logprobs is not None else None
             ),
@@ -220,6 +243,8 @@ class HuggingFaceAPI(ModelAPI):
                 output_tokens=response.output_tokens,
                 total_tokens=response.total_tokens,
             ),
+            time=response.time,
+            metadata={"hidden_states": response.hidden_states},
         )
 
     @override
@@ -251,6 +276,7 @@ class HuggingFaceAPI(ModelAPI):
             elif "qwen" in self.model_name.lower():
                 hf_messages = inspect_tools_to_string(hf_messages)
 
+        hf_messages = message_content_to_string(hf_messages)
         # apply chat template
         if self.tokenizer.chat_template is not None:
             chat = self.tokenizer.apply_chat_template(
@@ -258,6 +284,7 @@ class HuggingFaceAPI(ModelAPI):
                 add_generation_prompt=True,
                 tokenize=False,
                 tools=tools_list if len(tools_list) > 0 else None,
+                enable_thinking=self.enable_thinking,  # not all models use this, check if it is supported
             )
         else:
             chat = ""
@@ -265,6 +292,24 @@ class HuggingFaceAPI(ModelAPI):
                 chat += f"{message.role}: {message.content}\n"
         # return
         return cast(str, chat)
+
+
+def message_content_to_string(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Convert list of content in `ChatMessageAssistant`, `ChatMessageUser` or `ChatMessageSystem` to a string."""
+    for message in messages:
+        if isinstance(message.content, list):
+            is_multimodal = any(
+                isinstance(
+                    item, ContentAudio | ContentImage | ContentVideo | ContentDocument
+                )
+                for item in message.content
+            )
+            if is_multimodal:
+                raise NotImplementedError(
+                    "HuggingFace provider does not support multimodal content, please provide text inputs only."
+                )
+            message.content = message.text
+    return messages
 
 
 def shorten_tool_id(messages: list[ChatMessage]) -> list[ChatMessage]:
@@ -328,22 +373,25 @@ def chat_completion_assistant_message(
     if handler:
         return handler.parse_assistant_response(response.output, tools)
     else:
-        return ChatMessageAssistant(content=response.output, source="generate")
+        return ChatMessageAssistant(
+            content=response.output, model=model_name, source="generate"
+        )
 
 
 def set_random_seeds(seed: int | None = None) -> None:
     if seed is None:
-        seed = np.random.default_rng().integers(2**32 - 1)
+        seed = np.random.default_rng().integers(2**32 - 1)  # type: ignore
     # python hash seed
     os.environ["PYTHONHASHSEED"] = str(seed)
     # transformers seed
-    set_seed(seed)
+    set_seed(seed)  # type: ignore
 
 
 # return value from generate as a result of specifying return_dict_in_generate
 class ModelGenerateOutput:
     sequences: Tensor
     logits: tuple[Tensor]
+    hidden_states: tuple[tuple[Tensor]] | None
 
 
 class Tokenizer(Protocol):
@@ -377,13 +425,14 @@ class GenerateOutput:
     output_tokens: int
     total_tokens: int
     logprobs: torch.Tensor | None
+    hidden_states: tuple[tuple[torch.Tensor]] | None
+    time: float
 
 
 @dataclass
 class _QueueItem:
     input: GenerateInput
-    future: asyncio.Future[GenerateOutput]
-    loop: asyncio.AbstractEventLoop
+    future: Future[GenerateOutput]
 
 
 batch_thread: Thread | None = None
@@ -399,25 +448,26 @@ async def batched_generate(input: GenerateInput) -> GenerateOutput:
         batch_thread.start()
 
     # enqueue the job
-    loop = asyncio.get_event_loop()
-    future: asyncio.Future[GenerateOutput] = loop.create_future()
-    batch_queue.put(_QueueItem(input=input, future=future, loop=loop))
+    future = Future[GenerateOutput]()
+    batch_queue.put(_QueueItem(input=input, future=future))
 
-    # await the job
-    await future
-
-    # return it
-    return future.result()
+    # await the future
+    with trace_action(logger, "HF Batched Generate", "HF Batched Generate"):
+        while True:
+            try:
+                return future.result(timeout=0.01)
+            except concurrent.futures.TimeoutError:
+                pass
+            await anyio.sleep(1)
 
 
 def process_batches() -> None:
     while True:
         # drain the queue (wait until no new messages have shown up for 2 seconds)
-        inputs: list[tuple[GenerateInput, asyncio.Future[GenerateOutput]]] = []
+        inputs: list[tuple[GenerateInput, Future[GenerateOutput]]] = []
         while True:
             try:
                 input = batch_queue.get(timeout=2)
-                loop = input.loop
                 inputs.append((input.input, input.future))
                 if len(inputs) == input.input.batch_size:
                     # max batch size reached
@@ -432,6 +482,7 @@ def process_batches() -> None:
 
         try:
             # capture the generator and decoder functions
+            start_time = time.monotonic()
             first_input = inputs[0][0]
             device = first_input.device
             tokenizer = first_input.tokenizer
@@ -453,6 +504,7 @@ def process_batches() -> None:
                 )
                 generate_ids = generation_outputs.sequences
                 logits = generation_outputs.logits
+                hidden_states = generation_outputs.hidden_states
 
             # get logprobs from logits
             logprobs = None
@@ -467,6 +519,7 @@ def process_batches() -> None:
             outputs = decoder(sequences=generated_tokens)
 
             # call back futures
+            total_time = time.monotonic() - start_time
             for i, output in enumerate(outputs):
                 future = inputs[i][1]
                 input_tokens = input_ids.size(dim=1)
@@ -475,21 +528,24 @@ def process_batches() -> None:
                 # asyncio futures are not thread safe, so we need to pass the event loop
                 # down to this point, so we can mark the future as done in a thread safe manner.
                 # see: https://docs.python.org/3/library/asyncio-dev.html#concurrency-and-multithreading
-                loop.call_soon_threadsafe(
-                    future.set_result,
+                future.set_result(
                     GenerateOutput(
                         output=output,
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         total_tokens=input_tokens + output_tokens,
                         logprobs=logprobs[i] if logprobs is not None else None,
-                    ),
+                        hidden_states=hidden_states
+                        if hidden_states is not None
+                        else None,
+                        time=total_time,
+                    )
                 )
 
         except Exception as ex:
             for inp in inputs:
                 future = inp[1]
-                loop.call_soon_threadsafe(future.set_exception, ex)
+                future.set_exception(ex)
 
 
 def extract_logprobs(

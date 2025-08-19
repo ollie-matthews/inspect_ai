@@ -14,7 +14,7 @@ Solvers are the heart of Inspect evaluations and can serve a wide variety of pur
 5.  Multi-turn dialog
 6.  Running an agent scaffold
 
-Tasks have a single top-level solver that defines an execution plan. This solver could be implemented with arbitrary Python code (calling the model as required) or could consist of a set of other solvers composed together. Solvers can therefore play two differnet roles:
+Tasks have a single top-level solver that defines an execution plan. This solver could be implemented with arbitrary Python code (calling the model as required) or could consist of a set of other solvers composed together. Solvers can therefore play two different roles:
 
 1.  *Composite* specifications for task execution; and
 
@@ -117,18 +117,19 @@ You can also imagine solvers that call other models to help come up with a bette
 ## Built-In Solvers
 
 Inspect has a number of built-in solvers, each of which can be customised in some fashion. Built in solvers can be imported from the `inspect_ai.solver` module. Below is a summary of these solvers. There is not (yet) reference documentation on these functions so the best way to learn about how they can be customised, etc. is to use the **Go to Definition** command in your source editor.
+
 -   `prompt_template()`
 
-    Modify the user prompt by substituting the current prompt into the `{prompt}` placeholder within the specified template. Also automatically substitutes any variables defined in sample `metadata` as well as any other custom named paramters passed in `params`.
+    Modify the user prompt by substituting the current prompt into the `{prompt}` placeholder within the specified template. Also automatically substitutes any variables defined in sample `metadata` as well as any other custom named parameters passed in `params`.
 
 
 -   `system_message()`
 
-    Prepend role="system" `message` to the list of messages (will follow any other system messages it finds in the message stream). Also automatically substitutes any variables defined in sample `metadata` and `store`, as well as any other custom named paramters passed in `params`.
+    Prepend role="system" `message` to the list of messages (will follow any other system messages it finds in the message stream). Also automatically substitutes any variables defined in sample `metadata` and `store`, as well as any other custom named parameters passed in `params`.
 
 -   `user_message()`
 
-    Append role="user" `message` to the list of messages. Also automatically substitutes any variables defined in sample `metadata` and `store`, as well as any other custom named paramters passed in `params`.
+    Append role="user" `message` to the list of messages. Also automatically substitutes any variables defined in sample `metadata` and `store`, as well as any other custom named parameters passed in `params`.
 
 
 -   `chain_of_thought()`
@@ -190,7 +191,7 @@ Here is the task definition:
 @task
 def mmlu():
     # read the dataset
-    dataset = csv_dataset(
+    task_dataset = csv_dataset(
         "mmlu.csv", 
         sample_fields=record_to_sample
     )

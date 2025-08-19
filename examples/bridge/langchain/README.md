@@ -1,27 +1,30 @@
 ## LangChain Agent
 
-This example demonstrates using a native [LangChain](https://www.langchain.com/) agent with Inspect to perform Q/A using the [Tavili Search API](https://tavily.com/). The example uses the new [`bridge()`](https://github.com/UKGovernmentBEIS/inspect_ai/pull/1181) solver which enables integrating arbitrary 3rd party agent frameworks into Inspect.
+This example demonstrates using a native [LangChain](https://www.langchain.com/) agent with Inspect to perform Q/A using the [Tavili Search API](https://tavily.com/). 
 
-The example includes the following source files:
+The example uses the [`agent_bridge()`](https://inspect.aisi.org.uk/agent-bridge.html) which enables integrating arbitrary 3rd party agent frameworks into Inspect. Source files include:
 
 | File            | Description                                                                            |
 |------------------|------------------------------------------------------|
-| [agent.py](agent.py)      | LangChain agent (this file has no dependencies on Insepct, it is pure LangChain). |
-| [task.py](task.py)       | Evaluation task which uses `bridge()` to use the LangChain agent as a solver.          |
+| [agent.py](agent.py)      | LangChain agent created using `agent_bridge()`. |
+| [task.py](task.py)       | Evaluation task which uses the agent.          |
 | [dataset.json](dataset.json) | Dataset with questions and ideal answers.                                              |
+| [requirements.txt](requirements.txt) | Dependencies for LangChain example. |
+
 
 To run the example, first, be sure you have a [Tavili](https://tavily.com/) account and set the `TAVILY_API_KEY` environment variable.
 
-Then, install the following LangChain packages:
+To run the example, install the required dependencies as follows:
 
 ``` python
-pip install langchain-core langchain-openai langchain-community langgraph
+cd examples/bridge/langchain
+pip install -r requirements.txt
 ```
 
 Now you should be able to run the example as follows against various models:
 
 ``` bash
-inspect eval examples/bridge/langchain --model openai/gpt-4 
-inspect eval examples/bridge/langchain --model anthropic/claude-3-haiku-20240307
-inspect eval examples/bridge/langchain --model google/gemini-1.5-pro
+inspect eval task.py --model openai/gpt-4o
+inspect eval task.py --model anthropic/claude-3-7-sonnet-latest
+inspect eval task.py --model google/gemini-2.5-pro
 ```

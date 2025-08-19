@@ -22,5 +22,5 @@ def popularity():
     return Task(
         dataset=dataset,
         solver=[system_message(SYSTEM_MESSAGE), generate()],
-        scorer=match(),
+        scorer=[match()],
     )

@@ -6,9 +6,12 @@ title: "inspect_ai.log"
 
 ### list_eval_logs
 ### write_eval_log
+### write_eval_log_async
 ### read_eval_log
+### read_eval_log_async
 ### read_eval_log_sample
 ### read_eval_log_samples
+### read_eval_log_sample_summaries
 ### convert_eval_logs
 ### bundle_log_dir
 ### write_log_dir_manifest
@@ -21,6 +24,7 @@ title: "inspect_ai.log"
 ### EvalSpec
 ### EvalDataset
 ### EvalConfig
+### EvalModelConfig
 ### EvalRevision
 ### EvalPlan
 ### EvalPlanStep
@@ -31,31 +35,40 @@ title: "inspect_ai.log"
 ### EvalStats
 ### EvalError
 ### EvalSample
+### EvalSampleSummary
 ### EvalSampleLimit
 ### EvalSampleReductions
 ### EvalSampleScore
+### WriteConflictError
 
 ## Transcript API
 
 ### transcript
 ### Transcript
 ### Event
+### event_tree
+### event_sequence
+### EventTree
+### EventNode
+### SpanNode
 ### SampleInitEvent
 ### SampleLimitEvent
 ### StateEvent
 ### StoreEvent
 ### ModelEvent
 ### ToolEvent
+### SandboxEvent
 ### ApprovalEvent
 ### InputEvent
-### StoreEvent
 ### ErrorEvent
 ### LoggerEvent
 ### LoggingLevel
 ### LoggingMessage
 ### InfoEvent
-### StepEvent
+### SpanBeginEvent
+### SpanEndEvent
 ### SubtaskEvent
+
 
 
 

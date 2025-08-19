@@ -6,11 +6,11 @@ from test_helpers.utils import (
     skip_if_no_grok,
     skip_if_no_mistral,
     skip_if_no_openai,
-    skip_if_no_vertex,
 )
 
 from inspect_ai import Task, eval, task
 from inspect_ai.dataset import json_dataset
+from inspect_ai.model._model import get_model
 from inspect_ai.scorer import match
 from inspect_ai.solver import generate, system_message
 
@@ -44,9 +44,9 @@ def test_openai_images():
     check_images("openai/gpt-4o")
 
 
-@skip_if_no_vertex
-def test_vertex_images():
-    check_images("vertex/gemini-1.5-flash")
+@skip_if_no_openai
+def test_openai_responses_images():
+    check_images(get_model("openai/gpt-4o", responses_api=True))
 
 
 @skip_if_no_anthropic
@@ -61,4 +61,4 @@ def test_mistral_images():
 
 @skip_if_no_grok
 def test_grok_images():
-    check_images("grok/grok-vision-beta")
+    check_images("grok/grok-2-vision")

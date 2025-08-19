@@ -53,7 +53,7 @@ Inspect includes some simple text matching scorers as well as a couple of model 
 
     Have another model assess whether the model output contains a fact that is set out in `target`. This is a more narrow assessment than `model_graded_qa()`, and is used when model output is too complex to be assessed using a simple `match()` or `pattern()` scorer.
 
--   `choices()`
+-   `choice()`
 
     Specialised scorer that is used with the `multiple_choice()` solver.
 
@@ -117,7 +117,7 @@ The built-in model graded scorers also support using multiple grader models (whe
 ``` python
 model_graded_qa(
     model = [
-        "google/gemini-1.0-pro",
+        "google/gemini-1.5-pro",
         "anthropic/claude-3-opus-20240229" 
         "together/meta-llama/Llama-3-70b-chat-hf",
     ]
@@ -178,8 +178,8 @@ If you are extracting an answer from within a completion (e.g. looking for text 
 ``` python
 Value = Union[
     str | int | float | bool,
-    list[str | int | float | bool],
-    dict[str, str | int | float | bool],
+    Sequence[str | int | float | bool],
+    Mapping[str, str | int | float | bool],
 ]
 ```
 
@@ -519,7 +519,7 @@ Inspect includes some simple built in metrics for calculating accuracy, mean, et
 
 -   `var()`
 
-    Sample variance over all scores.
+    Sample variance over all scores.  
 
 -   `std()`
 
@@ -533,7 +533,35 @@ Inspect includes some simple built in metrics for calculating accuracy, mean, et
 
     Standard deviation of a bootstrapped estimate of the mean. 1000 samples are taken by default (modify this using the `num_samples` option).
 
-#### Clustered Standard Errors
+### Metric Grouping
+
+The `grouped()` function applies a given metric to subgroups of samples defined by a key in sample `metadata`, creating a separate metric for each group along with an `"all"` metric that aggregates across all samplesor groups. Each sample must have a value for whatever key is used for grouping.
+
+For example, let's say you wanted to create a separate accuracy metric for each distinct "category" variable defined in `Sample` metadata:
+
+``` python
+@task
+def gpqa():
+    return Task(
+        dataset=read_gpqa_dataset("gpqa_main.csv"),
+        solver=[
+            system_message(SYSTEM_MESSAGE),
+            multiple_choice(),
+        ],
+        scorer=choice(),
+        metrics=[grouped(accuracy(), "category"), stderr()]
+    )
+```
+
+The `metrics` passed to the `Task` override the default metrics of the `choice()` scorer.
+
+Note that the `"all"` metric by default takes the selected metric over all of the samples. If you prefer that it take the mean of the individual grouped values, pass `all="groups"`:
+
+```python
+grouped(accuracy(), "category", all="groups")
+```
+
+### Clustered Stderr
 
 The `stderr()` metric supports computing [clustered standard errors](https://en.wikipedia.org/wiki/Clustered_standard_errors) via the `cluster` parameter. Most scorers already include `stderr()` as a built-in metric, so to compute clustered standard errors you'll want to specify custom `metrics` for your task (which will override the scorer's built in metrics).
 
@@ -713,7 +741,7 @@ When you use the `inspect score` command, you will prompted whether or not you'd
 inspect score ./logs/2024-02-23_task_gpt-4_TUhnCn473c6.eval --overwrite
 ```
 
-#### Ovewriting Scores
+#### Overwriting Scores
 
 When rescoring a previously scored log file you have two options:
 
@@ -740,7 +768,7 @@ log = eval(popularity, model="openai/gpt-4")[0]
 grader_models = [
     "openai/gpt-4",
     "anthropic/claude-3-opus-20240229",
-    "google/gemini-1.0-pro",
+    "google/gemini-1.5-pro",
     "mistral/mistral-large-latest"
 ]
 
@@ -760,7 +788,7 @@ log = read_eval_log(input_log_path)
 grader_models = [
     "openai/gpt-4",
     "anthropic/claude-3-opus-20240229",
-    "google/gemini-1.0-pro",
+    "google/gemini-1.5-pro",
     "mistral/mistral-large-latest"
 ]
 

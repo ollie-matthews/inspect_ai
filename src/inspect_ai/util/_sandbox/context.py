@@ -1,10 +1,12 @@
+from contextlib import contextmanager
 from contextvars import ContextVar
 from logging import getLogger
-from typing import Any, NoReturn, cast
+from typing import Any, Iterator, NoReturn, cast
 
 from shortuuid import uuid
 
 from inspect_ai._util.constants import SANDBOX_SETUP_TIMEOUT
+from inspect_ai.util._sandbox.events import SandboxEnvironmentProxy
 
 from .environment import (
     SampleCleanup,
@@ -22,7 +24,7 @@ def sandbox(name: str | None = None) -> SandboxEnvironment:
     """Get the SandboxEnvironment for the current sample.
 
     Args:
-      name (str | None): Optional sandbox environmnent name.
+      name (str | None): Optional sandbox environment name.
 
     Return:
       SandboxEnvironment instance.
@@ -38,24 +40,32 @@ def sandbox(name: str | None = None) -> SandboxEnvironment:
 
     # For None, 'default', or a single environment only take the first environment
     if name is None or name == "default" or len(environments) == 1:
-        return list(environments.values())[0]
+        return default_sandbox_environment(environments)
     else:
         environment = environments.get(name, None)
         if not environment:
             raise ValueError(
-                f"SandboxEnvironment '{name}' is not a recoginized environment name."
+                f"SandboxEnvironment '{name}' is not a recognized environment name."
             )
         return environment
 
 
-async def sandbox_with(file: str) -> SandboxEnvironment | None:
+async def sandbox_with(
+    file: str, on_path: bool = False, *, name: str | None = None
+) -> SandboxEnvironment | None:
     """Get the SandboxEnvironment for the current sample that has the specified file.
 
     Args:
-      file (str): Path to file to check for.
+      file (str): Path to file to check for if on_path is False. If on_path is
+        True, file should be a filename that exists on the system path.
+      on_path (bool): If True, file is a filename to be verified using "which".
+        If False, file is a path to be checked within the sandbox environments.
+      name (str | None): Optional sandbox environment name.
+
 
     Return:
-      SandboxEnvironment instance or None if no sandboxes had the file.
+      SandboxEnvironment instance or None if none of the sandboxes (or the named
+      sandbox) had the file.
     """
     # get environments and with mapping
     environments = sandbox_environments_context_var.get(None)
@@ -65,19 +75,31 @@ async def sandbox_with(file: str) -> SandboxEnvironment | None:
     if environments_with is None:
         raise_no_sandbox()
 
-    # if we've already disovered the sandbox for this file then return it
-    environment = environments_with.get(file, None)
+    # if we've already discovered the sandbox for this file then return it
+    environment_with_key = f"{name or ''}:{file}:{on_path}"
+    environment = environments_with.get(environment_with_key, None)
     if environment is not None:
         return environment
 
-    # look in each sandbox
-    for _, environment in environments.items():
+    # look in each (or the named) sandbox
+    for environment in (
+        environments.values()
+        if name is None
+        else [named_env]
+        if (named_env := environments.get(name, None))
+        else []
+    ):
         try:
-            # can we read the file?
-            await environment.read_file(file)
+            if on_path:
+                # can we find the file on the path?
+                if not (await environment.exec(["which", file])).success:
+                    continue
+            else:
+                # can we read the file?
+                await environment.read_file(file)
 
             # if so this is our environment, cache and return it
-            environments_with[file] = environment
+            environments_with[environment_with_key] = environment
             return environment
 
         # allow exception types known to be raised from read_file
@@ -132,7 +154,16 @@ async def init_sandbox_environments_sample(
     # verify that there is at least one environment and a 'default' env
     validate_sandbox_environments(sandboxenv_type, environments)
 
+    # proxy environments (for recording SandboxEvent)
+    environments = {k: SandboxEnvironmentProxy(v) for k, v in environments.items()}
+
     try:
+        # set context
+        sandbox_environments_context_var.set(environments)
+        sandbox_with_environments_context_var.set({})
+        default_name = next(iter(environments.keys()))
+        sandbox_default_context_var.set(default_name)
+
         # copy files into environments
         await copy_sandbox_environment_files(files, environments)
 
@@ -140,14 +171,11 @@ async def init_sandbox_environments_sample(
         if setup:
             await setup_sandbox_environment(setup, environments)
 
-        # set context
-        sandbox_environments_context_var.set(environments)
-        sandbox_with_environments_context_var.set({})
-
         # return environments
         return environments
 
     except Exception as ex:
+        environments = unproxy_environments(environments)
         await sample_cleanup(task_name, config, environments, True)
         raise ex
 
@@ -161,7 +189,17 @@ async def cleanup_sandbox_environments_sample(
 ) -> None:
     sandboxenv_type = registry_find_sandboxenv(type)
     sample_cleanup = cast(SampleCleanup, getattr(sandboxenv_type, "sample_cleanup"))
+    environments = unproxy_environments(environments)
     await sample_cleanup(task_name, config, environments, interrupted)
+
+
+def unproxy_environments(
+    environments: dict[str, SandboxEnvironment],
+) -> dict[str, SandboxEnvironment]:
+    return {
+        k: v._sandbox
+        for k, v in cast(dict[str, SandboxEnvironmentProxy], environments).items()
+    }
 
 
 async def copy_sandbox_environment_files(
@@ -177,7 +215,8 @@ async def copy_sandbox_environment_files(
             target_env = environments.get(envname, None)
             if not target_env:
                 raise RuntimeError(
-                    f"Environment referenced in sample file not found: '{envname}:{file}'"
+                    f"Environment referenced in sample file not found: '{envname}:{file}'. "
+                    + "Note that ':' can be optionally used to specify an explicit environment name for sample files (e.g. 'envname:file') so cannot be used as a character within filenames."
                 )
         else:
             target_env = default_environment
@@ -214,7 +253,13 @@ async def setup_sandbox_environment(
 def default_sandbox_environment(
     environments: dict[str, SandboxEnvironment],
 ) -> SandboxEnvironment:
-    return list(environments.values())[0]
+    default_name = sandbox_default_context_var.get()
+    if default_name in environments:
+        return environments[default_name]
+    else:
+        raise ValueError(
+            f"Default sandbox environment '{default_name}' not found in environments"
+        )
 
 
 def validate_sandbox_environments(
@@ -228,6 +273,20 @@ def validate_sandbox_environments(
         )
 
 
+@contextmanager
+def sandbox_default(name: str) -> Iterator[None]:
+    """Set the default sandbox environment for the current context.
+
+    Args:
+       name: Sandbox to set as the default.
+    """
+    token = sandbox_default_context_var.set(name)
+    try:
+        yield
+    finally:
+        sandbox_default_context_var.reset(token)
+
+
 sandbox_environments_context_var = ContextVar[dict[str, SandboxEnvironment]](
     "sandbox_environments"
 )
@@ -235,3 +294,5 @@ sandbox_environments_context_var = ContextVar[dict[str, SandboxEnvironment]](
 sandbox_with_environments_context_var = ContextVar[dict[str, SandboxEnvironment]](
     "sandbox_with_environments"
 )
+
+sandbox_default_context_var = ContextVar[str]("sandbox_default")

@@ -101,7 +101,7 @@ class Plan(Solver):
             # execute steps
             for index, solver in enumerate(self.steps):
                 # run solver
-                with solver_transcript(solver, state) as st:
+                async with solver_transcript(solver, state) as st:
                     state = await solver(state, generate)
                     st.complete(state)
 
@@ -112,12 +112,9 @@ class Plan(Solver):
 
             # execute finish
             if self.finish:
-                with solver_transcript(self.finish, state) as st:
+                async with solver_transcript(self.finish, state) as st:
                     state = await self.finish(state, generate)
                     st.complete(state)
-
-            # mark completed
-            state.completed = True
 
         finally:
             # always do cleanup if we have one
@@ -125,7 +122,9 @@ class Plan(Solver):
                 try:
                     await self.cleanup(state)
                 except Exception as ex:
-                    logger.warning(f"Exception occurred during plan cleanup: {ex}")
+                    logger.warning(
+                        f"Exception occurred during plan cleanup: {ex}", exc_info=ex
+                    )
 
         return state
 
@@ -164,7 +163,7 @@ def plan(*plan: PlanType | None, name: str | None = None, **attribs: Any) -> Any
                 plan_type,
                 plan,
                 RegistryInfo(
-                    type="plan",
+                    type="plan",  # type: ignore[arg-type]
                     name=plan_name,
                     metadata=dict(attribs=attribs, params=params),
                 ),
@@ -212,7 +211,9 @@ def plan_register(
     registry_add(
         plan,
         RegistryInfo(
-            type="plan", name=name, metadata=dict(attribs=attribs, params=params)
+            type="plan",  # type: ignore[arg-type]
+            name=name,
+            metadata=dict(attribs=attribs, params=params),
         ),
     )
     return plan
@@ -228,4 +229,4 @@ def plan_create(name: str, **kwargs: Any) -> Plan:
     Returns:
         Plan with registry info attribute
     """
-    return cast(Plan, registry_create("plan", name, **kwargs))
+    return registry_create("plan", name, **kwargs)

@@ -1,4 +1,5 @@
 import functools
+import os
 from typing import Any, Callable, Literal, cast
 
 import click
@@ -10,7 +11,10 @@ from inspect_ai._util.constants import (
     DEFAULT_DISPLAY,
     DEFAULT_LOG_LEVEL,
 )
+from inspect_ai._util.dotenv import init_cli_env
 from inspect_ai.util._display import init_display_type
+
+from .util import parse_cli_args
 
 
 class CommonOptions(TypedDict):
@@ -18,6 +22,8 @@ class CommonOptions(TypedDict):
     log_dir: str
     display: Literal["full", "conversation", "rich", "plain", "none"]
     no_ansi: bool | None
+    traceback_locals: bool
+    env: tuple[str] | None
     debug: bool
     debug_port: int
     debug_errors: bool
@@ -54,7 +60,8 @@ def common_options(func: Callable[..., Any]) -> Callable[..., click.Context]:
     @click.option(
         "--display",
         type=click.Choice(
-            ["full", "conversation", "rich", "plain", "none"], case_sensitive=False
+            ["full", "conversation", "rich", "plain", "log", "none"],
+            case_sensitive=False,
         ),
         default=DEFAULT_DISPLAY,
         envvar="INSPECT_DISPLAY",
@@ -67,6 +74,20 @@ def common_options(func: Callable[..., Any]) -> Callable[..., click.Context]:
         hidden=True,
         help="Do not print ANSI control characters.",
         envvar="INSPECT_NO_ANSI",
+    )
+    @click.option(
+        "--traceback-locals",
+        type=bool,
+        is_flag=True,
+        envvar="INSPECT_TRACEBACK_LOCALS",
+        help="Include values of local variables in tracebacks (note that this can leak private data e.g. API keys so should typically only be enabled for targeted debugging).",
+    )
+    @click.option(
+        "--env",
+        multiple=True,
+        type=str,
+        envvar="INSPECT_EVAL_ENV",
+        help="Define an environment variable e.g. --env NAME=value (--env can be specified multiple times)",
     )
     @click.option(
         "--debug", is_flag=True, envvar="INSPECT_DEBUG", help="Wait to attach debugger"
@@ -92,6 +113,14 @@ def common_options(func: Callable[..., Any]) -> Callable[..., click.Context]:
 
 
 def process_common_options(options: CommonOptions) -> None:
+    # set environment variables
+    env_args = parse_cli_args(options["env"])
+    init_cli_env(env_args)
+
+    # set traceback locals env var
+    if options.get("traceback_locals", False):
+        os.environ["INSPECT_TRACEBACK_LOCALS"] = "1"
+
     # propagate display
     if options["no_ansi"]:
         display = "rich"

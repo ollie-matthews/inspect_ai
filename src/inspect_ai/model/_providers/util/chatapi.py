@@ -7,17 +7,15 @@ from tenacity import (
     retry,
     retry_if_exception,
     stop_after_attempt,
-    stop_after_delay,
     wait_exponential_jitter,
 )
 
-from inspect_ai._util.constants import DEFAULT_MAX_RETRIES
-from inspect_ai._util.retry import httpx_should_retry, log_retry_attempt
+from inspect_ai._util.http import is_retryable_http_status
+from inspect_ai._util.httpx import httpx_should_retry, log_httpx_retry_attempt
 from inspect_ai.model._chat_message import ChatMessageAssistant, ChatMessageTool
 from inspect_ai.tool._tool_info import ToolInfo
 
-from ..._chat_message import ChatMessage
-from ..._generate_config import GenerateConfig
+from ..._chat_message import ChatMessage, ChatMessageUser
 
 logger = getLogger(__name__)
 
@@ -25,6 +23,9 @@ ChatAPIMessage = dict[Literal["role", "content"], str]
 
 
 class ChatAPIHandler:
+    def __init__(self, model: str) -> None:
+        self.model = model
+
     def input_with_tools(
         self, input: list[ChatMessage], tools: list[ToolInfo]
     ) -> list[ChatMessage]:
@@ -33,7 +34,9 @@ class ChatAPIHandler:
     def parse_assistant_response(
         self, response: str, tools: list[ToolInfo]
     ) -> ChatMessageAssistant:
-        return ChatMessageAssistant(content=response)
+        return ChatMessageAssistant(
+            content=response, model=self.model, source="generate"
+        )
 
     def assistant_message(self, message: ChatMessageAssistant) -> ChatAPIMessage:
         return {"role": "assistant", "content": message.text}
@@ -50,7 +53,7 @@ class ChatAPIHandler:
 def chat_api_input(
     input: list[ChatMessage],
     tools: list[ToolInfo],
-    handler: ChatAPIHandler = ChatAPIHandler(),
+    handler: ChatAPIHandler,
 ) -> list[ChatAPIMessage]:
     # add tools to input
     if len(tools) > 0:
@@ -69,27 +72,51 @@ def chat_api_message(message: ChatMessage, handler: ChatAPIHandler) -> ChatAPIMe
         return dict(role=message.role, content=message.text)
 
 
+def chat_api_messages_for_handler(
+    input: list[ChatMessage],
+    tools: list[ToolInfo],
+    handler: ChatAPIHandler,
+) -> list[ChatMessage]:
+    # add tools to input
+    if len(tools) > 0:
+        input = handler.input_with_tools(input, tools)
+
+    # resolve other messages
+    return [chat_api_handler_message(message, handler) for message in input]
+
+
+def chat_api_handler_message(
+    message: ChatMessage, handler: ChatAPIHandler
+) -> ChatMessage:
+    if message.role == "assistant":
+        return ChatMessageAssistant(
+            content=handler.assistant_message(message)["content"]
+        )
+    elif message.role == "tool":
+        tool_message = handler.tool_message(message)
+        if tool_message["role"] == "tool":
+            return ChatMessageTool(content=tool_message["content"])
+        elif tool_message["role"] == "user":
+            return ChatMessageUser(content=tool_message["content"])
+        else:
+            return message
+    else:
+        return message
+
+
 async def chat_api_request(
     client: httpx.AsyncClient,
     model_name: str,
     url: str,
     headers: dict[str, Any],
     json: Any,
-    config: GenerateConfig,
 ) -> Any:
-    # provide default max_retries
-    max_retries = config.max_retries if config.max_retries else DEFAULT_MAX_RETRIES
-
     # define call w/ retry policy
     @retry(
         wait=wait_exponential_jitter(),
-        stop=(
-            (stop_after_attempt(max_retries) | stop_after_delay(config.timeout))
-            if config.timeout
-            else stop_after_attempt(max_retries)
-        ),
+        stop=(stop_after_attempt(2)),
         retry=retry_if_exception(httpx_should_retry),
-        before_sleep=log_retry_attempt(model_name),
+        before_sleep=log_httpx_retry_attempt(model_name),
     )
     async def call_api() -> Any:
         response = await client.post(url=url, headers=headers, json=json)
@@ -104,14 +131,21 @@ async def chat_api_request(
 # checking for rate limit errors needs to punch through the RetryError and
 # look at its `__cause__`. we've observed Cloudflare giving transient 500
 # status as well as a ReadTimeout, so we count these as rate limit errors
-def is_chat_api_rate_limit(ex: BaseException) -> bool:
-    return isinstance(ex, RetryError) and (
-        (
-            isinstance(ex.__cause__, httpx.HTTPStatusError)
-            and (
-                ex.__cause__.response.status_code == 429
-                or ex.__cause__.response.status_code == 500
-            )
-        )
-        or isinstance(ex.__cause__, httpx.ReadTimeout)
-    )
+def should_retry_chat_api_error(ex: BaseException) -> bool:
+    # not a tenacity RetryError
+    if not isinstance(ex, RetryError):
+        return False
+
+    cause = ex.__cause__
+
+    if cause is None:
+        raise RuntimeError(f"Tenacity RetryError with no __cause__: {ex}")
+
+    if isinstance(cause, httpx.HTTPStatusError):
+        if is_retryable_http_status(cause.response.status_code):
+            return True
+
+    if httpx_should_retry(cause):
+        return True
+
+    return False

@@ -18,7 +18,7 @@ from .display import (
     TaskSuccess,
     TaskWithResult,
 )
-from .panel import task_panel, task_targets
+from .panel import task_panel
 from .rich import rich_theme
 
 
@@ -41,8 +41,6 @@ def task_result_cancelled(
 ) -> RenderableType:
     # The contents of the panel
     config = task_config(profile)
-    targets = task_targets(profile)
-    subtitle = config, targets
     body = task_stats(cancelled.stats)
 
     # The panel
@@ -50,7 +48,7 @@ def task_result_cancelled(
         profile=profile,
         show_model=True,
         body=body,
-        subtitle=subtitle,
+        subtitle=config,
         footer=task_interrupted(profile, cancelled.samples_completed),
         log_location=profile.log_location,
     )
@@ -59,25 +57,77 @@ def task_result_cancelled(
 def task_results(profile: TaskProfile, success: TaskSuccess) -> RenderableType:
     theme = rich_theme()
 
-    # do we have more than one scorer name?
-    message = task_metrics(success.results.scores)
+    grid = Table.grid(expand=True)
+    grid.add_column()
+
+    if success.results.scores:
+        for row in task_scores(success.results.scores):
+            grid.add_row(row)
 
     # note if some of our samples had errors
     if success.samples_completed < profile.samples:
         sample_errors = profile.samples - success.samples_completed
         sample_error_pct = int(float(sample_errors) / float(profile.samples) * 100)
-        if message:
-            message = f"{message}\n\n"
-        message = f"{message}[{theme.warning}]WARNING: {sample_errors} of {profile.samples} samples ({sample_error_pct}%) had errors and were not scored.[/{theme.warning}]"
+        message = f"\n[{theme.warning}]WARNING: {sample_errors} of {profile.samples} samples ({sample_error_pct}%) had errors and were not scored.[/{theme.warning}]\n"
+        return Group(grid, message)
+    else:
+        return grid
 
-    return message
+
+SCORES_PER_ROW = 4
+
+
+def task_scores(scores: list[EvalScore], pad_edge: bool = False) -> list[Table]:
+    rows: list[Table] = []
+
+    # Process scores in groups
+    for i in range(0, len(scores), SCORES_PER_ROW):
+        # Create a grid for this row of scores
+        score_row = Table.grid(
+            expand=False,
+            padding=(0, 2, 0, 0),
+        )
+
+        # Add columns for each score in this row
+        for _ in range(SCORES_PER_ROW):
+            score_row.add_column()
+
+        # Create individual score tables and add them to the row
+        score_tables: list[Table | str] = []
+        for score in scores[i : i + SCORES_PER_ROW]:
+            table = Table(
+                show_header=False,
+                show_lines=False,
+                box=None,
+                show_edge=False,
+                pad_edge=pad_edge,
+            )
+            table.add_column()
+            table.add_column()
+
+            # Add score name and metrics
+            table.add_row(f"[bold]{score.name}[/bold]")
+            for name, metric in score.metrics.items():
+                table.add_row(f"{name}", f"{metric.value:.3f}")
+
+            score_tables.append(table)
+
+        # Fill remaining slots with empty tables if needed
+        while len(score_tables) < SCORES_PER_ROW:
+            score_tables.append("")
+
+        # Add the score tables to this row
+        score_row.add_row(*score_tables)
+
+        # Add this row of scores to the main grid
+        rows.append(score_row)
+
+    return rows
 
 
 def task_result_summary(profile: TaskProfile, success: TaskSuccess) -> RenderableType:
     # The contents of the panel
     config = task_config(profile)
-    targets = task_targets(profile)
-    subtitle = config, targets
     body = task_stats(success.stats)
 
     # the panel
@@ -85,7 +135,7 @@ def task_result_summary(profile: TaskProfile, success: TaskSuccess) -> Renderabl
         profile=profile,
         show_model=True,
         body=body,
-        subtitle=subtitle,
+        subtitle=config,
         footer=task_results(profile, success),
         log_location=profile.log_location,
     )
@@ -131,9 +181,14 @@ def task_stats(stats: EvalStats) -> RenderableType:
         else:
             input_tokens = f"[bold]I: [/bold]{usage.input_tokens:,}"
 
+        if usage.reasoning_tokens is not None:
+            reasoning_tokens = f", [bold]R: [/bold]{usage.reasoning_tokens:,}"
+        else:
+            reasoning_tokens = ""
+
         table.add_row(
             Text(model, style="bold"),
-            f"  {usage.total_tokens:,} tokens [{input_tokens}, [bold]O: [/bold]{usage.output_tokens:,}]",
+            f"  {usage.total_tokens:,} tokens [{input_tokens}, [bold]O: [/bold]{usage.output_tokens:,}{reasoning_tokens}]",
             style=theme.light,
         )
 
@@ -175,7 +230,7 @@ def task_metric(metrics: list[TaskDisplayMetric], width: int | None = None) -> s
     )
 
     metric = metrics[0]
-    if np.isnan(metric.value):
+    if metric.value is None or np.isnan(metric.value):
         value = " n/a"
     else:
         value = f"{metric.value:.2f}"

@@ -9,8 +9,12 @@ from inspect_ai._util.constants import BASE_64_DATA_REMOVED
 from inspect_ai._util.content import (
     Content,
     ContentAudio,
+    ContentData,
+    ContentDocument,
     ContentImage,
+    ContentReasoning,
     ContentText,
+    ContentToolUse,
     ContentVideo,
 )
 from inspect_ai._util.hash import mm3_hash
@@ -24,6 +28,7 @@ from inspect_ai.model._model_output import ModelOutput
 from ._log import EvalSample
 from ._transcript import (
     Event,
+    InfoEvent,
     ModelEvent,
     SampleInitEvent,
     StateEvent,
@@ -132,6 +137,25 @@ def resolve_sample_attachments(sample: EvalSample) -> EvalSample:
     )
 
 
+def attachments_content_fn(
+    log_images: bool, max_length: int, attachments: dict[str, str]
+) -> Callable[[str], str]:
+    def create_attachment(text: str) -> str:
+        hash = mm3_hash(text)
+        attachments[hash] = text
+        return f"{ATTACHMENT_PROTOCOL}{hash}"
+
+    def content_fn(text: str) -> str:
+        if not log_images and is_data_uri(text):
+            return BASE_64_DATA_REMOVED
+        elif len(text) > max_length:
+            return create_attachment(text)
+        else:
+            return text
+
+    return content_fn
+
+
 def walk_events(events: list[Event], content_fn: Callable[[str], str]) -> list[Event]:
     return [walk_event(event, content_fn) for event in events]
 
@@ -149,6 +173,8 @@ def walk_event(event: Event, content_fn: Callable[[str], str]) -> Event:
         return walk_subtask_event(event, content_fn)
     elif isinstance(event, ToolEvent):
         return walk_tool_event(event, content_fn)
+    elif isinstance(event, InfoEvent):
+        return walk_info_event(event, content_fn)
     else:
         return event
 
@@ -161,6 +187,10 @@ def walk_subtask_event(
 
 def walk_tool_event(event: ToolEvent, content_fn: Callable[[str], str]) -> ToolEvent:
     return event.model_copy(update=dict(events=walk_events(event.events, content_fn)))
+
+
+def walk_info_event(event: InfoEvent, content_fn: Callable[[str], str]) -> InfoEvent:
+    return event.model_copy(update=dict(data=walk_json_value(event.data, content_fn)))
 
 
 def walk_sample_init_event(
@@ -217,6 +247,7 @@ def walk_model_call(
         return ModelCall(
             request=walk_json_dict(call.request, content_fn),
             response=walk_json_dict(call.response, content_fn),
+            time=call.time,
         )
     else:
         return None
@@ -314,3 +345,19 @@ def walk_content(content: Content, content_fn: Callable[[str], str]) -> Content:
         return content.model_copy(update=dict(audio=content_fn(content.audio)))
     elif isinstance(content, ContentVideo):
         return content.model_copy(update=dict(video=content_fn(content.video)))
+    elif isinstance(content, ContentReasoning):
+        return content.model_copy(update=dict(reasoning=content_fn(content.reasoning)))
+    elif isinstance(content, ContentToolUse):
+        return content.model_copy(
+            update=dict(
+                arguments=walk_json_value(content.arguments, content_fn),
+                result=walk_json_value(content.result, content_fn),
+                error=content_fn(content.error) if content.error else content.error,
+            )
+        )
+    elif isinstance(content, ContentData):
+        return content.model_copy(
+            update=dict(data=walk_json_value(content.data, content_fn))
+        )
+    elif isinstance(content, ContentDocument):
+        return content.model_copy(update=dict(document=content_fn(content.document)))

@@ -3,10 +3,51 @@
     "ApprovalEvent": {
       "description": "Tool approval.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -84,7 +125,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "message",
@@ -139,6 +184,7 @@
           "title": "Tools"
         },
         "params": {
+          "additionalProperties": true,
           "title": "Params",
           "type": "object"
         }
@@ -151,10 +197,93 @@
       "title": "ApproverPolicyConfig",
       "type": "object"
     },
-    "BaseModel": {
-      "properties": {},
-      "title": "BaseModel",
-      "type": "object"
+    "BatchConfig": {
+      "description": "Batch processing configuration.",
+      "properties": {
+        "size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size"
+        },
+        "max_size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Size"
+        },
+        "send_delay": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Send Delay"
+        },
+        "tick": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tick"
+        },
+        "max_batches": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Batches"
+        },
+        "max_consecutive_check_failures": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Consecutive Check Failures"
+        }
+      },
+      "title": "BatchConfig",
+      "type": "object",
+      "required": [
+        "size",
+        "max_size",
+        "send_delay",
+        "tick",
+        "max_batches",
+        "max_consecutive_check_failures"
+      ],
+      "additionalProperties": false
     },
     "ChatCompletionChoice": {
       "description": "Choice generated for completion.",
@@ -199,11 +328,17 @@
     "ChatMessageAssistant": {
       "description": "Assistant chat message.",
       "properties": {
-        "role": {
-          "const": "assistant",
-          "default": "assistant",
-          "title": "Role",
-          "type": "string"
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
         },
         "content": {
           "anyOf": [
@@ -217,6 +352,9 @@
                     "$ref": "#/$defs/ContentText"
                   },
                   {
+                    "$ref": "#/$defs/ContentReasoning"
+                  },
+                  {
                     "$ref": "#/$defs/ContentImage"
                   },
                   {
@@ -224,6 +362,15 @@
                   },
                   {
                     "$ref": "#/$defs/ContentVideo"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentData"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentToolUse"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentDocument"
                   }
                 ]
               },
@@ -247,6 +394,36 @@
           ],
           "default": null,
           "title": "Source"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        },
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "const": "assistant",
+          "default": "assistant",
+          "title": "Role",
+          "type": "string"
         },
         "tool_calls": {
           "anyOf": [
@@ -263,7 +440,7 @@
           "default": null,
           "title": "Tool Calls"
         },
-        "reasoning": {
+        "model": {
           "anyOf": [
             {
               "type": "string"
@@ -273,15 +450,18 @@
             }
           ],
           "default": null,
-          "title": "Reasoning"
+          "title": "Model"
         }
       },
       "required": [
-        "role",
+        "id",
         "content",
         "source",
+        "metadata",
+        "internal",
+        "role",
         "tool_calls",
-        "reasoning"
+        "model"
       ],
       "title": "ChatMessageAssistant",
       "type": "object",
@@ -290,11 +470,17 @@
     "ChatMessageSystem": {
       "description": "System chat message.",
       "properties": {
-        "role": {
-          "const": "system",
-          "default": "system",
-          "title": "Role",
-          "type": "string"
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
         },
         "content": {
           "anyOf": [
@@ -308,6 +494,9 @@
                     "$ref": "#/$defs/ContentText"
                   },
                   {
+                    "$ref": "#/$defs/ContentReasoning"
+                  },
+                  {
                     "$ref": "#/$defs/ContentImage"
                   },
                   {
@@ -315,6 +504,15 @@
                   },
                   {
                     "$ref": "#/$defs/ContentVideo"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentData"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentToolUse"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentDocument"
                   }
                 ]
               },
@@ -338,12 +536,45 @@
           ],
           "default": null,
           "title": "Source"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        },
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "const": "system",
+          "default": "system",
+          "title": "Role",
+          "type": "string"
         }
       },
       "required": [
-        "role",
+        "id",
         "content",
-        "source"
+        "source",
+        "metadata",
+        "internal",
+        "role"
       ],
       "title": "ChatMessageSystem",
       "type": "object",
@@ -352,11 +583,17 @@
     "ChatMessageTool": {
       "description": "Tool chat message.",
       "properties": {
-        "role": {
-          "const": "tool",
-          "default": "tool",
-          "title": "Role",
-          "type": "string"
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
         },
         "content": {
           "anyOf": [
@@ -370,6 +607,9 @@
                     "$ref": "#/$defs/ContentText"
                   },
                   {
+                    "$ref": "#/$defs/ContentReasoning"
+                  },
+                  {
                     "$ref": "#/$defs/ContentImage"
                   },
                   {
@@ -377,6 +617,15 @@
                   },
                   {
                     "$ref": "#/$defs/ContentVideo"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentData"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentToolUse"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentDocument"
                   }
                 ]
               },
@@ -400,6 +649,36 @@
           ],
           "default": null,
           "title": "Source"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        },
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "const": "tool",
+          "default": "tool",
+          "title": "Role",
+          "type": "string"
         },
         "tool_call_id": {
           "anyOf": [
@@ -438,9 +717,12 @@
         }
       },
       "required": [
-        "role",
+        "id",
         "content",
         "source",
+        "metadata",
+        "internal",
+        "role",
         "tool_call_id",
         "function",
         "error"
@@ -452,11 +734,17 @@
     "ChatMessageUser": {
       "description": "User chat message.",
       "properties": {
-        "role": {
-          "const": "user",
-          "default": "user",
-          "title": "Role",
-          "type": "string"
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
         },
         "content": {
           "anyOf": [
@@ -470,6 +758,9 @@
                     "$ref": "#/$defs/ContentText"
                   },
                   {
+                    "$ref": "#/$defs/ContentReasoning"
+                  },
+                  {
                     "$ref": "#/$defs/ContentImage"
                   },
                   {
@@ -477,6 +768,15 @@
                   },
                   {
                     "$ref": "#/$defs/ContentVideo"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentData"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentToolUse"
+                  },
+                  {
+                    "$ref": "#/$defs/ContentDocument"
                   }
                 ]
               },
@@ -501,6 +801,36 @@
           "default": null,
           "title": "Source"
         },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        },
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "const": "user",
+          "default": "user",
+          "title": "Role",
+          "type": "string"
+        },
         "tool_call_id": {
           "anyOf": [
             {
@@ -518,9 +848,12 @@
         }
       },
       "required": [
-        "role",
+        "id",
         "content",
         "source",
+        "metadata",
+        "internal",
+        "role",
         "tool_call_id"
       ],
       "title": "ChatMessageUser",
@@ -530,6 +863,17 @@
     "ContentAudio": {
       "description": "Audio content.",
       "properties": {
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "type": {
           "const": "audio",
           "default": "audio",
@@ -550,6 +894,7 @@
         }
       },
       "required": [
+        "internal",
         "type",
         "audio",
         "format"
@@ -558,9 +903,174 @@
       "type": "object",
       "additionalProperties": false
     },
+    "ContentCitation": {
+      "description": "A generic content citation.",
+      "properties": {
+        "cited_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalItems": false,
+              "items": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cited Text"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "internal": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Internal"
+        },
+        "type": {
+          "const": "content",
+          "default": "content",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "ContentCitation",
+      "type": "object",
+      "required": [
+        "cited_text",
+        "title",
+        "internal",
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "ContentData": {
+      "description": "Model internal.",
+      "properties": {
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "data",
+          "default": "data",
+          "title": "Type",
+          "type": "string"
+        },
+        "data": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Data",
+          "type": "object"
+        }
+      },
+      "required": [
+        "internal",
+        "type",
+        "data"
+      ],
+      "title": "ContentData",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "ContentDocument": {
+      "description": "Document content (e.g. a PDF).",
+      "properties": {
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "document",
+          "default": "document",
+          "title": "Type",
+          "type": "string"
+        },
+        "document": {
+          "title": "Document",
+          "type": "string"
+        },
+        "filename": {
+          "title": "Filename",
+          "type": "string"
+        },
+        "mime_type": {
+          "title": "Mime Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "internal",
+        "type",
+        "document",
+        "filename",
+        "mime_type"
+      ],
+      "title": "ContentDocument",
+      "type": "object",
+      "additionalProperties": false
+    },
     "ContentImage": {
       "description": "Image content.",
       "properties": {
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "type": {
           "const": "image",
           "default": "image",
@@ -583,6 +1093,7 @@
         }
       },
       "required": [
+        "internal",
         "type",
         "image",
         "detail"
@@ -591,9 +1102,73 @@
       "type": "object",
       "additionalProperties": false
     },
+    "ContentReasoning": {
+      "description": "Reasoning content.\n\nSee the specification for [thinking blocks](https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#understanding-thinking-blocks) for Claude models.",
+      "properties": {
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "reasoning",
+          "default": "reasoning",
+          "title": "Type",
+          "type": "string"
+        },
+        "reasoning": {
+          "title": "Reasoning",
+          "type": "string"
+        },
+        "signature": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signature"
+        },
+        "redacted": {
+          "default": false,
+          "title": "Redacted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "internal",
+        "type",
+        "reasoning",
+        "signature",
+        "redacted"
+      ],
+      "title": "ContentReasoning",
+      "type": "object",
+      "additionalProperties": false
+    },
     "ContentText": {
       "description": "Text content.",
       "properties": {
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "type": {
           "const": "text",
           "default": "text",
@@ -603,19 +1178,156 @@
         "text": {
           "title": "Text",
           "type": "string"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Refusal"
+        },
+        "citations": {
+          "anyOf": [
+            {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "content": "#/$defs/ContentCitation",
+                    "document": "#/$defs/DocumentCitation",
+                    "url": "#/$defs/UrlCitation"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/ContentCitation"
+                  },
+                  {
+                    "$ref": "#/$defs/DocumentCitation"
+                  },
+                  {
+                    "$ref": "#/$defs/UrlCitation"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citations"
         }
       },
       "required": [
+        "internal",
         "type",
-        "text"
+        "text",
+        "refusal",
+        "citations"
       ],
       "title": "ContentText",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "ContentToolUse": {
+      "description": "Server side tool use.",
+      "properties": {
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "tool_use",
+          "default": "tool_use",
+          "title": "Type",
+          "type": "string"
+        },
+        "tool_type": {
+          "title": "Tool Type",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        },
+        "arguments": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "result": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        }
+      },
+      "required": [
+        "internal",
+        "type",
+        "tool_type",
+        "id",
+        "name",
+        "context",
+        "arguments",
+        "result",
+        "error"
+      ],
+      "title": "ContentToolUse",
       "type": "object",
       "additionalProperties": false
     },
     "ContentVideo": {
       "description": "Video content.",
       "properties": {
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "type": {
           "const": "video",
           "default": "video",
@@ -637,6 +1349,7 @@
         }
       },
       "required": [
+        "internal",
         "type",
         "video",
         "format"
@@ -645,13 +1358,169 @@
       "type": "object",
       "additionalProperties": false
     },
+    "DocumentCitation": {
+      "description": "A citation that refers to a page range in a document.",
+      "properties": {
+        "cited_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalItems": false,
+              "items": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cited Text"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "internal": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Internal"
+        },
+        "type": {
+          "const": "document",
+          "default": "document",
+          "title": "Type",
+          "type": "string"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocumentRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "DocumentCitation",
+      "type": "object",
+      "required": [
+        "cited_text",
+        "title",
+        "internal",
+        "type",
+        "range"
+      ],
+      "additionalProperties": false
+    },
+    "DocumentRange": {
+      "description": "A range specifying a section of a document.",
+      "properties": {
+        "type": {
+          "enum": [
+            "block",
+            "page",
+            "char"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "start_index": {
+          "title": "Start Index",
+          "type": "integer"
+        },
+        "end_index": {
+          "title": "End Index",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "start_index",
+        "end_index"
+      ],
+      "title": "DocumentRange",
+      "type": "object",
+      "additionalProperties": false
+    },
     "ErrorEvent": {
       "description": "Event with sample error.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -676,7 +1545,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "error"
@@ -723,6 +1596,18 @@
             },
             {
               "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "items": {
                 "anyOf": [
                   {
                     "type": "string"
@@ -740,6 +1625,21 @@
           ],
           "default": null,
           "title": "Sample Id"
+        },
+        "sample_shuffle": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Shuffle"
         },
         "epochs": {
           "anyOf": [
@@ -794,6 +1694,18 @@
           "default": null,
           "title": "Fail On Error"
         },
+        "retry_on_error": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry On Error"
+        },
         "message_limit": {
           "anyOf": [
             {
@@ -829,6 +1741,18 @@
           ],
           "default": null,
           "title": "Time Limit"
+        },
+        "working_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Limit"
         },
         "max_samples": {
           "anyOf": [
@@ -902,6 +1826,18 @@
           "default": null,
           "title": "Log Samples"
         },
+        "log_realtime": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Log Realtime"
+        },
         "log_images": {
           "anyOf": [
             {
@@ -926,6 +1862,18 @@
           "default": null,
           "title": "Log Buffer"
         },
+        "log_shared": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Log Shared"
+        },
         "score_display": {
           "anyOf": [
             {
@@ -944,21 +1892,26 @@
       "required": [
         "limit",
         "sample_id",
+        "sample_shuffle",
         "epochs",
         "epochs_reducer",
         "approval",
         "fail_on_error",
+        "retry_on_error",
         "message_limit",
         "token_limit",
         "time_limit",
+        "working_limit",
         "max_samples",
         "max_tasks",
         "max_subprocesses",
         "max_sandboxes",
         "sandbox_cleanup",
         "log_samples",
+        "log_realtime",
         "log_images",
         "log_buffer",
+        "log_shared",
         "score_display"
       ],
       "additionalProperties": false
@@ -1006,12 +1959,24 @@
           "anyOf": [
             {
               "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "items": {
                 "anyOf": [
                   {
-                    "type": "integer"
+                    "type": "string"
                   },
                   {
-                    "type": "string"
+                    "type": "integer"
                   }
                 ]
               },
@@ -1092,12 +2057,14 @@
           "title": "Value"
         },
         "params": {
+          "additionalProperties": true,
           "title": "Params",
           "type": "object"
         },
         "metadata": {
           "anyOf": [
             {
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -1115,6 +2082,72 @@
         "metadata"
       ],
       "title": "EvalMetric",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "EvalMetricDefinition": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Options"
+        }
+      },
+      "required": [
+        "name",
+        "options"
+      ],
+      "title": "EvalMetricDefinition",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "EvalModelConfig": {
+      "description": "Model config.",
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/$defs/GenerateConfig"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        },
+        "args": {
+          "additionalProperties": true,
+          "title": "Args",
+          "type": "object"
+        }
+      },
+      "required": [
+        "model",
+        "config",
+        "base_url",
+        "args"
+      ],
+      "title": "EvalModelConfig",
       "type": "object",
       "additionalProperties": false
     },
@@ -1170,7 +2203,12 @@
             "max_tool_output": null,
             "cache_prompt": null,
             "reasoning_effort": null,
-            "reasoning_history": null
+            "reasoning_tokens": null,
+            "reasoning_summary": null,
+            "reasoning_history": null,
+            "response_schema": null,
+            "extra_body": null,
+            "batch": null
           }
         }
       },
@@ -1192,6 +2230,7 @@
           "type": "string"
         },
         "params": {
+          "additionalProperties": true,
           "title": "Params",
           "type": "object"
         }
@@ -1228,6 +2267,7 @@
         "metadata": {
           "anyOf": [
             {
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -1425,10 +2465,12 @@
           "title": "Scores"
         },
         "metadata": {
+          "additionalProperties": true,
           "title": "Metadata",
           "type": "object"
         },
         "store": {
+          "additionalProperties": true,
           "title": "Store",
           "type": "object"
         },
@@ -1440,6 +2482,9 @@
               },
               {
                 "$ref": "#/$defs/SampleLimitEvent"
+              },
+              {
+                "$ref": "#/$defs/SandboxEvent"
               },
               {
                 "$ref": "#/$defs/StateEvent"
@@ -1472,6 +2517,12 @@
                 "$ref": "#/$defs/InfoEvent"
               },
               {
+                "$ref": "#/$defs/SpanBeginEvent"
+              },
+              {
+                "$ref": "#/$defs/SpanEndEvent"
+              },
+              {
                 "$ref": "#/$defs/StepEvent"
               },
               {
@@ -1489,6 +2540,42 @@
           "title": "Model Usage",
           "type": "object"
         },
+        "total_time": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Time"
+        },
+        "working_time": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Time"
+        },
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
         "error": {
           "anyOf": [
             {
@@ -1499,6 +2586,21 @@
             }
           ],
           "default": null
+        },
+        "error_retries": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/EvalError"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Retries"
         },
         "attachments": {
           "additionalProperties": {
@@ -1535,7 +2637,11 @@
         "store",
         "events",
         "model_usage",
+        "total_time",
+        "working_time",
+        "uuid",
         "error",
+        "error_retries",
         "attachments",
         "limit"
       ],
@@ -1544,12 +2650,13 @@
       "additionalProperties": false
     },
     "EvalSampleLimit": {
-      "description": "Limit encontered by sample.",
+      "description": "Limit encountered by sample.",
       "properties": {
         "type": {
           "enum": [
             "context",
             "time",
+            "working",
             "message",
             "token",
             "operator",
@@ -1560,7 +2667,7 @@
         },
         "limit": {
           "title": "Limit",
-          "type": "integer"
+          "type": "number"
         }
       },
       "required": [
@@ -1695,6 +2802,7 @@
         "metadata": {
           "anyOf": [
             {
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -1754,7 +2862,32 @@
           "default": null,
           "title": "Reducer"
         },
+        "scored_samples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scored Samples"
+        },
+        "unscored_samples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unscored Samples"
+        },
         "params": {
+          "additionalProperties": true,
           "title": "Params",
           "type": "object"
         },
@@ -1768,6 +2901,7 @@
         "metadata": {
           "anyOf": [
             {
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -1782,6 +2916,8 @@
         "name",
         "scorer",
         "reducer",
+        "scored_samples",
+        "unscored_samples",
         "params",
         "metrics",
         "metadata"
@@ -1790,9 +2926,93 @@
       "type": "object",
       "additionalProperties": false
     },
+    "EvalScorer": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Options"
+        },
+        "metrics": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvalMetricDefinition"
+                  },
+                  {
+                    "additionalProperties": {
+                      "items": {
+                        "$ref": "#/$defs/EvalMetricDefinition"
+                      },
+                      "type": "array"
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "items": {
+                  "$ref": "#/$defs/EvalMetricDefinition"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metrics"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        }
+      },
+      "required": [
+        "name",
+        "options",
+        "metrics",
+        "metadata"
+      ],
+      "title": "EvalScorer",
+      "type": "object",
+      "additionalProperties": false
+    },
     "EvalSpec": {
       "description": "Eval target and configuration.",
       "properties": {
+        "eval_id": {
+          "title": "Eval Id",
+          "type": "string"
+        },
         "run_id": {
           "title": "Run Id",
           "type": "string"
@@ -1810,9 +3030,16 @@
           "type": "string"
         },
         "task_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
           "default": 0,
-          "title": "Task Version",
-          "type": "integer"
+          "title": "Task Version"
         },
         "task_file": {
           "anyOf": [
@@ -1826,12 +3053,43 @@
           "default": null,
           "title": "Task File"
         },
+        "task_display_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Display Name"
+        },
+        "task_registry_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Registry Name"
+        },
         "task_attribs": {
+          "additionalProperties": true,
           "title": "Task Attribs",
           "type": "object"
         },
         "task_args": {
+          "additionalProperties": true,
           "title": "Task Args",
+          "type": "object"
+        },
+        "task_args_passed": {
+          "additionalProperties": true,
+          "title": "Task Args Passed",
           "type": "object"
         },
         "solver": {
@@ -1849,6 +3107,7 @@
         "solver_args": {
           "anyOf": [
             {
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -1891,6 +3150,9 @@
           "title": "Model",
           "type": "string"
         },
+        "model_generate_config": {
+          "$ref": "#/$defs/GenerateConfig"
+        },
         "model_base_url": {
           "anyOf": [
             {
@@ -1904,8 +3166,24 @@
           "title": "Model Base Url"
         },
         "model_args": {
+          "additionalProperties": true,
           "title": "Model Args",
           "type": "object"
+        },
+        "model_roles": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/EvalModelConfig"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Roles"
         },
         "config": {
           "$ref": "#/$defs/EvalConfig"
@@ -1931,6 +3209,7 @@
         "metadata": {
           "anyOf": [
             {
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -1939,29 +3218,76 @@
           ],
           "default": null,
           "title": "Metadata"
+        },
+        "scorers": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/EvalScorer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scorers"
+        },
+        "metrics": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/EvalMetricDefinition"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "items": {
+                  "$ref": "#/$defs/EvalMetricDefinition"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metrics"
         }
       },
       "required": [
+        "eval_id",
         "run_id",
         "created",
         "task",
         "task_id",
         "task_version",
         "task_file",
+        "task_display_name",
+        "task_registry_name",
         "task_attribs",
         "task_args",
+        "task_args_passed",
         "solver",
         "solver_args",
         "tags",
         "dataset",
         "sandbox",
         "model",
+        "model_generate_config",
         "model_base_url",
         "model_args",
+        "model_roles",
         "config",
         "revision",
         "packages",
-        "metadata"
+        "metadata",
+        "scorers",
+        "metrics"
       ],
       "title": "EvalSpec",
       "type": "object",
@@ -2264,6 +3590,7 @@
           "anyOf": [
             {
               "enum": [
+                "minimal",
                 "low",
                 "medium",
                 "high"
@@ -2277,10 +3604,45 @@
           "default": null,
           "title": "Reasoning Effort"
         },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Tokens"
+        },
+        "reasoning_summary": {
+          "anyOf": [
+            {
+              "enum": [
+                "concise",
+                "detailed",
+                "auto"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Summary"
+        },
         "reasoning_history": {
           "anyOf": [
             {
-              "type": "boolean"
+              "enum": [
+                "none",
+                "all",
+                "last",
+                "auto"
+              ],
+              "type": "string"
             },
             {
               "type": "null"
@@ -2288,6 +3650,48 @@
           ],
           "default": null,
           "title": "Reasoning History"
+        },
+        "response_schema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "extra_body": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extra Body"
+        },
+        "batch": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/BatchConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Batch"
         }
       },
       "title": "GenerateConfig",
@@ -2315,17 +3719,63 @@
         "max_tool_output",
         "cache_prompt",
         "reasoning_effort",
-        "reasoning_history"
+        "reasoning_tokens",
+        "reasoning_summary",
+        "reasoning_history",
+        "response_schema",
+        "extra_body",
+        "batch"
       ],
       "additionalProperties": false
     },
     "InfoEvent": {
       "description": "Event with custom info/data.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -2362,7 +3812,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "source",
@@ -2375,10 +3829,51 @@
     "InputEvent": {
       "description": "Input screen interaction.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -2408,7 +3903,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "input",
@@ -2416,6 +3915,159 @@
       ],
       "title": "InputEvent",
       "type": "object",
+      "additionalProperties": false
+    },
+    "JSONSchema": {
+      "description": "JSON Schema for type.",
+      "properties": {
+        "type": {
+          "anyOf": [
+            {
+              "enum": [
+                "string",
+                "integer",
+                "number",
+                "boolean",
+                "array",
+                "object",
+                "null"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        },
+        "format": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Format"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "default": {
+          "default": null,
+          "title": "Default"
+        },
+        "enum": {
+          "anyOf": [
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Enum"
+        },
+        "items": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JSONSchema"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "properties": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JSONSchema"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Properties"
+        },
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JSONSchema"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Additionalproperties"
+        },
+        "anyOf": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/JSONSchema"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Anyof"
+        },
+        "required": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required"
+        }
+      },
+      "title": "JSONSchema",
+      "type": "object",
+      "required": [
+        "type",
+        "format",
+        "description",
+        "default",
+        "enum",
+        "items",
+        "properties",
+        "additionalProperties",
+        "anyOf",
+        "required"
+      ],
       "additionalProperties": false
     },
     "JsonChange": {
@@ -2473,10 +4125,51 @@
     "LoggerEvent": {
       "description": "Log message recorded with Python logger.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -2501,7 +4194,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "message"
@@ -2662,11 +4359,24 @@
           },
           "title": "Response",
           "type": "object"
+        },
+        "time": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Time"
         }
       },
       "required": [
         "request",
-        "response"
+        "response",
+        "time"
       ],
       "title": "ModelCall",
       "type": "object",
@@ -2675,10 +4385,51 @@
     "ModelEvent": {
       "description": "Call to a language model.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -2701,6 +4452,18 @@
         "model": {
           "title": "Model",
           "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
         },
         "input": {
           "items": {
@@ -2751,6 +4514,18 @@
         "output": {
           "$ref": "#/$defs/ModelOutput"
         },
+        "retries": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        },
         "error": {
           "anyOf": [
             {
@@ -2789,21 +4564,54 @@
             }
           ],
           "default": null
+        },
+        "completed": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed"
+        },
+        "working_time": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Time"
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "model",
+        "role",
         "input",
         "tools",
         "tool_choice",
         "config",
         "output",
+        "retries",
         "error",
         "cache",
-        "call"
+        "call",
+        "completed",
+        "working_time"
       ],
       "title": "ModelEvent",
       "type": "object",
@@ -2823,6 +4631,11 @@
           },
           "title": "Choices",
           "type": "array"
+        },
+        "completion": {
+          "default": "",
+          "title": "Completion",
+          "type": "string"
         },
         "usage": {
           "anyOf": [
@@ -2850,6 +4663,7 @@
         "metadata": {
           "anyOf": [
             {
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -2877,6 +4691,7 @@
       "required": [
         "model",
         "choices",
+        "completion",
         "usage",
         "time",
         "metadata",
@@ -2925,6 +4740,18 @@
           ],
           "default": null,
           "title": "Input Tokens Cache Read"
+        },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Tokens"
         }
       },
       "title": "ModelUsage",
@@ -2934,8 +4761,54 @@
         "output_tokens",
         "total_tokens",
         "input_tokens_cache_write",
-        "input_tokens_cache_read"
+        "input_tokens_cache_read",
+        "reasoning_tokens"
       ],
+      "additionalProperties": false
+    },
+    "ResponseSchema": {
+      "description": "Schema for model response when using Structured Output.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "json_schema": {
+          "$ref": "#/$defs/JSONSchema"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "strict": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Strict"
+        }
+      },
+      "required": [
+        "name",
+        "json_schema",
+        "description",
+        "strict"
+      ],
+      "title": "ResponseSchema",
+      "type": "object",
       "additionalProperties": false
     },
     "Sample": {
@@ -3015,6 +4888,7 @@
         "metadata": {
           "anyOf": [
             {
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -3080,10 +4954,51 @@
     "SampleInitEvent": {
       "description": "Beginning of processing a Sample.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -3111,7 +5026,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "sample",
@@ -3124,10 +5043,51 @@
     "SampleLimitEvent": {
       "description": "The sample was unable to finish processing due to a limit",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -3151,6 +5111,7 @@
           "enum": [
             "message",
             "time",
+            "working",
             "token",
             "operator",
             "custom"
@@ -3165,7 +5126,7 @@
         "limit": {
           "anyOf": [
             {
-              "type": "integer"
+              "type": "number"
             },
             {
               "type": "null"
@@ -3176,7 +5137,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "type",
@@ -3188,18 +5153,30 @@
       "additionalProperties": false
     },
     "SandboxEnvironmentSpec": {
-      "maxItems": 2,
-      "minItems": 1,
-      "prefixItems": [
-        {
+      "description": "Specification of a SandboxEnvironment.",
+      "properties": {
+        "type": {
           "title": "Type",
           "type": "string"
         },
-        {
+        "config": {
+          "default": null,
+          "title": "Config"
+        }
+      },
+      "required": [
+        "type",
+        "config"
+      ],
+      "title": "SandboxEnvironmentSpec",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "SandboxEvent": {
+      "description": "Sandbox execution or I/O",
+      "properties": {
+        "uuid": {
           "anyOf": [
-            {
-              "$ref": "#/$defs/BaseModel"
-            },
             {
               "type": "string"
             },
@@ -3208,10 +5185,178 @@
             }
           ],
           "default": null,
-          "title": "Config"
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        },
+        "pending": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pending"
+        },
+        "event": {
+          "const": "sandbox",
+          "default": "sandbox",
+          "title": "Event",
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "exec",
+            "read_file",
+            "write_file"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "cmd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cmd"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Options"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "input": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output"
+        },
+        "completed": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed"
         }
+      },
+      "required": [
+        "uuid",
+        "span_id",
+        "timestamp",
+        "working_start",
+        "metadata",
+        "pending",
+        "event",
+        "action",
+        "cmd",
+        "options",
+        "file",
+        "input",
+        "result",
+        "output",
+        "completed"
       ],
-      "type": "array"
+      "title": "SandboxEvent",
+      "type": "object",
+      "additionalProperties": false
     },
     "Score": {
       "description": "Score generated by a scorer.",
@@ -3301,6 +5446,7 @@
         "metadata": {
           "anyOf": [
             {
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -3324,10 +5470,51 @@
     "ScoreEvent": {
       "description": "Event with score.\n\nCan be the final score for a `Sample`, or can be an intermediate score\nresulting from a call to `score`.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -3375,7 +5562,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "score",
@@ -3386,13 +5577,257 @@
       "type": "object",
       "additionalProperties": false
     },
-    "StateEvent": {
-      "description": "Change to the current `TaskState`",
+    "SpanBeginEvent": {
+      "description": "Mark the beginning of a transcript span.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        },
+        "pending": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pending"
+        },
+        "event": {
+          "const": "span_begin",
+          "default": "span_begin",
+          "title": "Event",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Id"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uuid",
+        "span_id",
+        "timestamp",
+        "working_start",
+        "metadata",
+        "pending",
+        "event",
+        "id",
+        "parent_id",
+        "type",
+        "name"
+      ],
+      "title": "SpanBeginEvent",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "SpanEndEvent": {
+      "description": "Mark the end of a transcript span.",
+      "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
+        },
+        "pending": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pending"
+        },
+        "event": {
+          "const": "span_end",
+          "default": "span_end",
+          "title": "Event",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uuid",
+        "span_id",
+        "timestamp",
+        "working_start",
+        "metadata",
+        "pending",
+        "event",
+        "id"
+      ],
+      "title": "SpanEndEvent",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "StateEvent": {
+      "description": "Change to the current `TaskState`",
+      "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -3421,7 +5856,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "changes"
@@ -3433,10 +5872,51 @@
     "StepEvent": {
       "description": "Step within current sample or subtask.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -3482,7 +5962,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "action",
@@ -3496,10 +5980,51 @@
     "StoreEvent": {
       "description": "Change to data within the current `Store`.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -3528,7 +6053,11 @@
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "changes"
@@ -3540,10 +6069,51 @@
     "SubtaskEvent": {
       "description": "Subtask spawned.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -3580,6 +6150,7 @@
           "title": "Type"
         },
         "input": {
+          "additionalProperties": true,
           "title": "Input",
           "type": "object"
         },
@@ -3595,6 +6166,9 @@
               },
               {
                 "$ref": "#/$defs/SampleLimitEvent"
+              },
+              {
+                "$ref": "#/$defs/SandboxEvent"
               },
               {
                 "$ref": "#/$defs/StateEvent"
@@ -3627,6 +6201,12 @@
                 "$ref": "#/$defs/InfoEvent"
               },
               {
+                "$ref": "#/$defs/SpanBeginEvent"
+              },
+              {
+                "$ref": "#/$defs/SpanEndEvent"
+              },
+              {
                 "$ref": "#/$defs/StepEvent"
               },
               {
@@ -3636,17 +6216,48 @@
           },
           "title": "Events",
           "type": "array"
+        },
+        "completed": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed"
+        },
+        "working_time": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Time"
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "name",
         "type",
         "input",
         "result",
-        "events"
+        "events",
+        "completed",
+        "working_time"
       ],
       "title": "SubtaskEvent",
       "type": "object",
@@ -3663,13 +6274,20 @@
           "type": "string"
         },
         "arguments": {
+          "additionalProperties": true,
           "title": "Arguments",
           "type": "object"
         },
-        "type": {
-          "const": "function",
-          "title": "Type",
-          "type": "string"
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "parse_error": {
           "anyOf": [
@@ -3693,15 +6311,28 @@
             }
           ],
           "default": null
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
         }
       },
       "required": [
         "id",
         "function",
         "arguments",
-        "type",
+        "internal",
         "parse_error",
-        "view"
+        "view",
+        "type"
       ],
       "title": "ToolCall",
       "type": "object",
@@ -3754,9 +6385,10 @@
             "permission",
             "file_not_found",
             "is_a_directory",
-            "output_limit",
+            "limit",
             "approval",
-            "unknown"
+            "unknown",
+            "output_limit"
           ],
           "title": "Type",
           "type": "string"
@@ -3811,10 +6443,51 @@
     "ToolEvent": {
       "description": "Call to a tool.",
       "properties": {
+        "uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uuid"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
         "timestamp": {
           "format": "date-time",
           "title": "Timestamp",
           "type": "string"
+        },
+        "working_start": {
+          "title": "Working Start",
+          "type": "number"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metadata"
         },
         "pending": {
           "anyOf": [
@@ -3854,6 +6527,17 @@
           },
           "title": "Arguments",
           "type": "object"
+        },
+        "internal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "view": {
           "anyOf": [
@@ -3957,6 +6641,9 @@
                 "$ref": "#/$defs/SampleLimitEvent"
               },
               {
+                "$ref": "#/$defs/SandboxEvent"
+              },
+              {
                 "$ref": "#/$defs/StateEvent"
               },
               {
@@ -3987,6 +6674,12 @@
                 "$ref": "#/$defs/InfoEvent"
               },
               {
+                "$ref": "#/$defs/SpanBeginEvent"
+              },
+              {
+                "$ref": "#/$defs/SpanEndEvent"
+              },
+              {
                 "$ref": "#/$defs/StepEvent"
               },
               {
@@ -3996,21 +6689,92 @@
           },
           "title": "Events",
           "type": "array"
+        },
+        "completed": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed"
+        },
+        "working_time": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Time"
+        },
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent"
+        },
+        "failed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message Id"
         }
       },
       "required": [
+        "uuid",
+        "span_id",
         "timestamp",
+        "working_start",
+        "metadata",
         "pending",
         "event",
         "type",
         "id",
         "function",
         "arguments",
+        "internal",
         "view",
         "result",
         "truncated",
         "error",
-        "events"
+        "events",
+        "completed",
+        "working_time",
+        "agent",
+        "failed",
+        "message_id"
       ],
       "title": "ToolEvent",
       "type": "object",
@@ -4043,87 +6807,11 @@
         },
         "parameters": {
           "$ref": "#/$defs/ToolParams"
-        }
-      },
-      "required": [
-        "name",
-        "description",
-        "parameters"
-      ],
-      "title": "ToolInfo",
-      "type": "object",
-      "additionalProperties": false
-    },
-    "ToolParam": {
-      "description": "Description of tool parameter in JSON Schema format.",
-      "properties": {
-        "type": {
+        },
+        "options": {
           "anyOf": [
             {
-              "enum": [
-                "string",
-                "integer",
-                "number",
-                "boolean",
-                "array",
-                "object",
-                "null"
-              ],
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Type"
-        },
-        "description": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Description"
-        },
-        "default": {
-          "default": null,
-          "title": "Default"
-        },
-        "enum": {
-          "anyOf": [
-            {
-              "items": {},
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Enum"
-        },
-        "items": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ToolParam"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "properties": {
-          "anyOf": [
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/ToolParam"
-              },
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -4131,67 +6819,17 @@
             }
           ],
           "default": null,
-          "title": "Properties"
-        },
-        "additionalProperties": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ToolParam"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Additionalproperties"
-        },
-        "anyOf": {
-          "anyOf": [
-            {
-              "items": {
-                "$ref": "#/$defs/ToolParam"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Anyof"
-        },
-        "required": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Required"
+          "title": "Options"
         }
       },
-      "title": "ToolParam",
-      "type": "object",
       "required": [
-        "type",
+        "name",
         "description",
-        "default",
-        "enum",
-        "items",
-        "properties",
-        "additionalProperties",
-        "anyOf",
-        "required"
+        "parameters",
+        "options"
       ],
+      "title": "ToolInfo",
+      "type": "object",
       "additionalProperties": false
     },
     "ToolParams": {
@@ -4206,7 +6844,7 @@
         "properties": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/$defs/ToolParam"
+            "$ref": "#/$defs/JSONSchema"
           },
           "title": "Properties"
         },
@@ -4266,6 +6904,84 @@
         "bytes"
       ],
       "title": "TopLogprob",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "UrlCitation": {
+      "description": "A citation that refers to a URL.",
+      "properties": {
+        "cited_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalItems": false,
+              "items": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cited Text"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "internal": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Internal"
+        },
+        "type": {
+          "const": "url",
+          "default": "url",
+          "title": "Type",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cited_text",
+        "title",
+        "internal",
+        "type",
+        "url"
+      ],
+      "title": "UrlCitation",
       "type": "object",
       "additionalProperties": false
     }
@@ -4352,6 +7068,18 @@
     "location": {
       "title": "Location",
       "type": "string"
+    },
+    "etag": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Etag"
     }
   },
   "required": [

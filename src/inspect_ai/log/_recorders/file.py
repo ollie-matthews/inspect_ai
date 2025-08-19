@@ -1,12 +1,14 @@
+import os
 from logging import getLogger
 from typing import Any
 
 from typing_extensions import override
 
+from inspect_ai._util.constants import MODEL_NONE
 from inspect_ai._util.file import filesystem
 from inspect_ai._util.registry import registry_unqualified_name
 
-from .._log import EvalLog, EvalSample, EvalSpec
+from .._log import EvalLog, EvalSample, EvalSampleSummary, EvalSpec
 from .recorder import Recorder
 
 logger = getLogger(__name__)
@@ -35,14 +37,14 @@ class FileRecorder(Recorder):
     @override
     @classmethod
     async def read_log_sample(
-        cls, location: str, id: str | int, epoch: int = 1
+        cls,
+        location: str,
+        id: str | int | None = None,
+        epoch: int = 1,
+        uuid: str | None = None,
     ) -> EvalSample:
         # establish the log to read from (might be cached)
-        if cls.__last_read_sample_log and (cls.__last_read_sample_log[0] == "location"):
-            eval_log = cls.__last_read_sample_log[1]
-        else:
-            eval_log = await cls.read_log(location)
-            cls.__last_read_sample_log = (location, eval_log)
+        eval_log = await cls._log_file_maybe_cached(location)
 
         # throw if no samples
         if not eval_log.samples:
@@ -53,7 +55,8 @@ class FileRecorder(Recorder):
             (
                 sample
                 for sample in (eval_log.samples)
-                if sample.id == id and sample.epoch == epoch
+                if (id and sample.id == id and sample.epoch == epoch)
+                or (uuid and sample.uuid == uuid)
             ),
             None,
         )
@@ -64,6 +67,25 @@ class FileRecorder(Recorder):
         else:
             return eval_sample
 
+    @classmethod
+    @override
+    async def read_log_sample_summaries(cls, location: str) -> list[EvalSampleSummary]:
+        # establish the log to read from (might be cached)
+        eval_log = await cls._log_file_maybe_cached(location)
+        if not eval_log.samples:
+            return []
+        return [sample.summary() for sample in eval_log.samples]
+
+    @classmethod
+    async def _log_file_maybe_cached(cls, location: str) -> EvalLog:
+        # establish the log to read from (might be cached)
+        if cls.__last_read_sample_log and (cls.__last_read_sample_log[0] == "location"):
+            eval_log = cls.__last_read_sample_log[1]
+        else:
+            eval_log = await cls.read_log(location)
+            cls.__last_read_sample_log = (location, eval_log)
+        return eval_log
+
     def _log_file_key(self, eval: EvalSpec) -> str:
         # clean underscores, slashes, and : from the log file key (so we can reliably parse it
         # later without worrying about underscores)
@@ -71,9 +93,18 @@ class FileRecorder(Recorder):
             return s.replace("_", "-").replace("/", "-").replace(":", "-")
 
         # remove package from task name
-        task = registry_unqualified_name(eval.task)
+        task = registry_unqualified_name(eval.task)  # noqa: F841
 
-        return f"{clean(eval.created)}_{clean(task)}_{clean(eval.task_id)}"
+        # derive log file pattern
+        log_file_pattern = os.getenv("INSPECT_EVAL_LOG_FILE_PATTERN", "{task}_{id}")
+
+        # compute and return log file name
+        log_file_name = f"{clean(eval.created)}_" + log_file_pattern
+        log_file_name = log_file_name.replace("{task}", clean(task))
+        log_file_name = log_file_name.replace("{id}", clean(eval.task_id))
+        model = clean(eval.model) if eval.model != MODEL_NONE else ""
+        log_file_name = log_file_name.replace("{model}", model)
+        return log_file_name
 
     def _log_file_path(self, eval: EvalSpec) -> str:
         return f"{self.log_dir}{self.fs.sep}{self._log_file_key(eval)}{self.suffix}"

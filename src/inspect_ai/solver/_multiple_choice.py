@@ -2,10 +2,11 @@ import logging
 import re
 from enum import Enum
 from random import Random
-from typing import Match, TypedDict
+from typing import TypedDict
 
 from typing_extensions import Unpack
 
+from inspect_ai._util.answer import answer_character, answer_index
 from inspect_ai._util.logger import warn_once
 from inspect_ai.util import resource
 
@@ -64,31 +65,13 @@ def answer_options(choices: Choices) -> str:
     indexes = list(range(len(choices)))
 
     return "\n".join(
-        [f"{chr(65 + i)}) {choices[j].value}" for i, j in enumerate(indexes)]
+        [f"{answer_character(i)}) {choices[j].value}" for i, j in enumerate(indexes)]
     )
-
-
-def answer_character(index: int) -> str:
-    r"""
-    Helper to go from array index to char, for example:
-
-        0 -> 'A', 1 -> 'B', etc
-    """
-    return chr(ord("A") + index)
-
-
-def answer_index(char: str) -> int:
-    r"""
-    Helper to go from char to array index, for example:
-
-        'A' -> 0, 'B' -> 1, etc
-    """
-    return ord(char.upper()) - ord("A")
 
 
 def prompt(question: str, choices: Choices, template: str) -> str:
     choices_text = answer_options(choices)
-    letters = ",".join(chr(65 + i) for i in range(len(choices)))
+    letters = ",".join(answer_character(i) for i in range(len(choices)))
 
     return template.format(
         choices=choices_text,
@@ -97,7 +80,7 @@ def prompt(question: str, choices: Choices, template: str) -> str:
     )
 
 
-def parse_answers(state: TaskState) -> Match[str] | None:
+def parse_answers(state: TaskState, multiple_correct: bool) -> set[str]:
     """
     Convenience function for extracting answers from the state output.
 
@@ -110,9 +93,9 @@ def parse_answers(state: TaskState) -> Match[str] | None:
     """
     # First check whether the string strictly ends with the expected answer
     # In this case, we're looking for a single line which contains the expected
-    # ANSWER: B,C string with only whitespace after it
+    # ANSWER: <answer> string with only whitespace or a period/full stop at the end.
     match = re.search(
-        r"(?i)^ANSWER\s*:\s*([A-Za-z ,]+)\s*(?:$|\n)",
+        r"(?i)^ANSWER\s*:\s*([A-Za-z\d ,]+)\s*(?:$|\n|\.)",
         state.output.completion,
         flags=re.MULTILINE,
     )
@@ -120,14 +103,52 @@ def parse_answers(state: TaskState) -> Match[str] | None:
     # If we couldn't match the strict version, we can try the less strict
     # version for backward compatibility
     if match is None:
-        return re.search(
-            r"(?i)ANSWER\s*:\s*([A-Za-z ,]+)(?:[^\w]|\n|$)", state.output.completion
+        match = re.search(
+            r"(?i)ANSWER\s*:\s*([A-Za-z\d ,]+)(?:[^\w]|\n|$|\.)",
+            state.output.completion,
         )
+
+    if match is None:
+        return set()
+
+    matched = match.group(1)
+
+    # Strip trailing period / full stop
+    matched = matched.strip()
+    matched = matched.rstrip(".")
+
+    allowed_options = set(answer_character(i) for i in range(len(state.choices)))
+
+    if multiple_correct:
+        # Match must contain only the allowed choices
+        # (may be separated by commas, spaces, the word 'and', or nothing at all)
+
+        matched = matched.replace(" and ", "")
+
+        matched = matched.replace(" ", "")
+
+        split_comma = set(matched.split(","))
+        if split_comma.issubset(allowed_options):
+            answers = split_comma
+            return answers
+
+        split_nothing = set(matched)
+        if split_nothing.issubset(allowed_options):
+            answers = split_nothing
+            return answers
+
     else:
-        return match
+        # Match must contain a single letter in the allowed choices
+        if matched in allowed_options:
+            answers = {matched}
+            return answers
+
+    return set()
 
 
-def set_choices_based_on_generated_response(state: TaskState, answers: str) -> None:
+def set_choices_based_on_generated_response(
+    state: TaskState, answers: set[str]
+) -> None:
     true_answers = [answer_index(letter) for letter in answers]
 
     for i in range(len(state.choices)):
@@ -217,6 +238,7 @@ def multiple_choice(
     template: str | None = None,
     cot: bool = False,
     multiple_correct: bool = False,
+    max_tokens: int | None = None,
     **kwargs: Unpack[DeprecatedArgs],
 ) -> Solver:
     """Multiple choice question solver. Formats a multiple choice question prompt, then calls `generate()`.
@@ -243,6 +265,8 @@ def multiple_choice(
         squares? A) 3, B) 4, C) 9" has multiple correct answers, B and C. Leave
         as `False` if there's exactly one correct answer from the choices
         available. NOTE: this has no effect if you provide a custom template.
+      max_tokens: Default `None`. Controls the number of tokens generated through the call
+        to generate().
       **kwargs (Any): Deprecated arguments for backward compatibility.
 
     #### Shuffling
@@ -299,15 +323,15 @@ def multiple_choice(
             template=str(template),
         )
 
-        state = await generate(state)
+        state = await generate(state, max_tokens=max_tokens)
 
-        answers = parse_answers(state)
-        if answers and answers.group(1):
+        answers = parse_answers(state, multiple_correct)
+        if answers:
             # If we've found answers, update the state appropriately
             set_choices_based_on_generated_response(
-                state=state, answers=answers.group(1)
+                state=state,
+                answers=answers,
             )
-
             if shuffle:
                 pretend_we_didnt_shuffle(
                     state=state,

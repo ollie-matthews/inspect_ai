@@ -1,7 +1,8 @@
 import re
 from functools import partial
-from typing import Callable
+from typing import Any, Callable
 
+from inspect_ai._util.content import Content, ContentText
 from inspect_ai._util.dict import omit
 from inspect_ai._util.format import format_function_call
 from inspect_ai._util.list import remove_last_match_and_after
@@ -13,6 +14,7 @@ from inspect_ai.model._chat_message import (
     ChatMessageUser,
 )
 from inspect_ai.model._model import Model, get_model
+from inspect_ai.model._model_output import ModelOutput
 from inspect_ai.solver._task_state import TaskState
 from inspect_ai.util import resource
 
@@ -166,16 +168,17 @@ def _model_graded_qa_single(
             question = state.input_text
 
         # format the scoring template
-        score_prompt = grading_template.format(
+        scoring_prompt = model_scoring_prompt(
+            template=grading_template,
             question=question,
-            answer=state.output.completion,
+            output=state.output,
             criterion=target.text,
             instructions=instructions,
-            **metadata,
+            metadata=metadata,
         )
 
         # query the model for the score
-        result = await model.generate(score_prompt)
+        result = await model.generate([scoring_prompt])
 
         # extract the grade
         match = re.search(grade_pattern or DEFAULT_GRADE_PATTERN, result.completion)
@@ -186,7 +189,7 @@ def _model_graded_qa_single(
                 explanation=result.completion,
                 metadata=dict(
                     grading=[
-                        ChatMessageUser(content=score_prompt),
+                        scoring_prompt,
                         result.message,
                     ]
                 ),
@@ -274,25 +277,71 @@ def chat_history(state: TaskState) -> str:
 
     # begin history with text of first message (it will come right after
     # 'Task' or 'Question' in the template)
-    history: list[str] = [messages[0].text]
+    history: list[str] = []
+    if len(messages) > 0:
+        history.append(messages[0].text)
 
-    # for subsequent messages present with e.g. Assistant: {message.text}
-    for message in messages[1:]:
-        if isinstance(message, ChatMessageUser):
-            history.append(f"User: {message.text}")
-        elif isinstance(message, ChatMessageAssistant):
-            assistant_message = [message.text] if message.text else []
-            if message.tool_calls:
-                assistant_message.extend(
-                    [
-                        format_function_call(tool_call.function, tool_call.arguments)
-                        for tool_call in message.tool_calls
-                    ]
+        # for subsequent messages present with e.g. Assistant: {message.text}
+        for message in messages[1:]:
+            if isinstance(message, ChatMessageUser):
+                history.append(f"User: {message.text}")
+            elif isinstance(message, ChatMessageAssistant):
+                assistant_message = [message.text] if message.text else []
+                if message.tool_calls:
+                    assistant_message.extend(
+                        [
+                            format_function_call(
+                                tool_call.function, tool_call.arguments
+                            )
+                            for tool_call in message.tool_calls
+                        ]
+                    )
+                history.append("Assistant: " + "\n\n".join(assistant_message))
+            elif isinstance(message, ChatMessageTool):
+                history.append(
+                    f"Tool ({message.function}): {message.tool_error or ''}{message.text}"
                 )
-            history.append("Assistant: " + "\n\n".join(assistant_message))
-        elif isinstance(message, ChatMessageTool):
-            history.append(
-                f"Tool ({message.function}): {message.tool_error or ''}{message.text}"
-            )
 
     return "\n\n".join(history)
+
+
+def model_scoring_prompt(
+    *,
+    template: str,
+    question: str,
+    output: ModelOutput,
+    criterion: str,
+    instructions: str,
+    metadata: dict[str, Any],
+) -> ChatMessageUser:
+    # we need to remove media objects from output and reference them as attachements in the answer
+    answer = output.completion
+    media: list[Content] = (
+        [
+            content
+            for content in output.message.content
+            if content.type in ["image", "audio", "video"]
+        ]
+        if len(output.choices) > 0 and isinstance(output.message.content, list)
+        else []
+    )
+    if len(media) > 0:
+        if len(answer) > 0:
+            answer = f"{answer} (see also attached media)"
+        else:
+            answer = "See attached media"
+
+    # format the prompt
+    prompt = template.format(
+        question=question,
+        answer=answer,
+        criterion=criterion,
+        instructions=instructions,
+        **metadata,
+    )
+
+    # return with media if necessary
+    if len(media) > 0:
+        return ChatMessageUser(content=[ContentText(text=prompt)] + media)
+    else:
+        return ChatMessageUser(content=prompt)

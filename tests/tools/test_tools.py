@@ -10,10 +10,8 @@ from test_helpers.tools import addition, raise_error, read_file
 from test_helpers.utils import (
     skip_if_no_anthropic,
     skip_if_no_google,
-    skip_if_no_groq,
     skip_if_no_mistral,
     skip_if_no_openai,
-    skip_if_no_vertex,
 )
 
 from inspect_ai import Task, eval
@@ -100,7 +98,10 @@ def check_tools_calls(model: Model, **model_args) -> None:
     model = get_model(model)
     task = Task(
         dataset=addition_dataset,
-        solver=[use_tools(addition()), generate()],
+        solver=[
+            use_tools(addition(), tool_choice=ToolFunction("addition")),
+            generate(),
+        ],
         scorer=match("any", numeric=True),
     )
 
@@ -167,9 +168,14 @@ def test_openai_tools():
     check_tools("openai/gpt-4")
 
 
+@skip_if_no_openai
+def test_openai_responses_tools():
+    check_tools(get_model("openai/gpt-4o-mini", responses_api=True))
+
+
 @skip_if_no_anthropic
 def test_anthropic_tools():
-    check_tools("anthropic/claude-3-sonnet-20240229", disable=["none"])
+    check_tools("anthropic/claude-3-7-sonnet-latest")
 
 
 @skip_if_no_mistral
@@ -177,19 +183,16 @@ def test_mistral_tools():
     check_tools("mistral/mistral-large-latest")
 
 
-@skip_if_no_groq
-def test_groq_tools():
-    check_tools("groq/mixtral-8x7b-32768")
+# groq tool calling is extremely unreliable and consequently causes
+# failed tests that are red herrings. don't exercise this for now.
+# @skip_if_no_groq
+# def test_groq_tools():
+#     check_tools("groq/mixtral-8x7b-32768")
 
 
 @skip_if_no_google
 def test_google_tools():
-    check_tools("google/gemini-1.0-pro")
-
-
-@skip_if_no_vertex
-def test_vertex_tools():
-    check_tools("vertex/gemini-1.5-flash")
+    check_tools("google/gemini-1.5-pro")
 
 
 def test_dynamic_tools():

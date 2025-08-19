@@ -1,14 +1,36 @@
 from __future__ import annotations
 
 import abc
+import logging
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal, NamedTuple, Union, overload
+from typing import (
+    Annotated,
+    Any,
+    Awaitable,
+    Callable,
+    Literal,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from inspect_ai._util.logger import warn_once
 
 from .._subprocess import ExecResult
 
+logger = logging.getLogger(__name__)
+
+ST = TypeVar("ST", bound="SandboxEnvironment")
+
 TaskInit = Callable[[str, Union["SandboxEnvironmentConfigType", None]], Awaitable[None]]
+TaskInitEnvironment = Callable[
+    [Union["SandboxEnvironmentConfigType", None], dict[str, str]],
+    Awaitable[dict[str, str]],
+]
 TaskCleanup = Callable[
     [str, Union["SandboxEnvironmentConfigType", None], bool], Awaitable[None]
 ]
@@ -26,6 +48,7 @@ SampleCleanup = Callable[
     ],
     Awaitable[None],
 ]
+ConfigDeserialize = Callable[[dict[str, Any]], BaseModel]
 
 
 class HostMapping(BaseModel):
@@ -168,11 +191,14 @@ class SandboxEnvironment(abc.ABC):
         """
         ...
 
-    async def connection(self) -> SandboxConnection:
+    async def connection(self, *, user: str | None = None) -> SandboxConnection:
         """Information required to connect to sandbox environment.
 
+        Args:
+          user: User to login as.
+
         Returns:
-           SandboxConnection: connection information
+           SandboxConnection: connection information.
 
         Raises:
            NotImplementedError: For sandboxes that don't provide connections
@@ -180,10 +206,24 @@ class SandboxEnvironment(abc.ABC):
         """
         raise NotImplementedError("connection not implemented")
 
-    @classmethod
-    def config_files(cls) -> list[str]:
-        """Standard config files for this provider (used for automatic discovery)"""
-        return []
+    def as_type(self, sandbox_cls: Type[ST]) -> ST:
+        """Verify and return a reference to a subclass of SandboxEnvironment.
+
+        Args:
+           sandbox_cls: Class of sandbox (subclass of SandboxEnvironment)
+
+        Returns:
+           Reference to the sandbox using the requested type.
+
+        Raises:
+           TypeError: If the sandbox is not of the requested type.
+        """
+        if isinstance(self, sandbox_cls):
+            return self
+        else:
+            raise TypeError(
+                f"Expected instance of {sandbox_cls.__name__}, got {type(self).__name__}"
+            )
 
     @classmethod
     def default_concurrency(cls) -> int | None:
@@ -201,6 +241,30 @@ class SandboxEnvironment(abc.ABC):
           config: Implementation defined configuration (optional).
         """
         pass
+
+    @classmethod
+    async def task_init_environment(
+        cls, config: SandboxEnvironmentConfigType | None, metadata: dict[str, str]
+    ) -> dict[str, str]:
+        """Called at task startup to identify environment variables required by task_init for a sample.
+
+        Return 1 or more environment variables to request a dedicated call to task_init
+        for samples that have exactly these environment variables (by default there is
+        only one call to task_init for all of the samples in a task if they share a
+        sandbox configuration).
+
+        This is useful for situations where config files are dynamic (e.g. through
+        sample metadata variable interpolation) and end up yielding different images
+        that need their own init (e.g. 'docker pull').
+
+        Args:
+            config: Implementation defined configuration (optional).
+            metadata: metadata: Sample `metadata` field
+
+        Returns:
+            Environment variables to set for call to task_init.
+        """
+        return {}
 
     @classmethod
     async def sample_init(
@@ -265,6 +329,30 @@ class SandboxEnvironment(abc.ABC):
         """
         pass
 
+    @classmethod
+    def config_files(cls) -> list[str]:
+        """Standard config files for this provider (used for automatic discovery)"""
+        return []
+
+    @classmethod
+    def config_deserialize(cls, config: dict[str, Any]) -> BaseModel:
+        """Deserialize a sandbox-specific configuration model from a dict.
+
+        Override this method if you support a custom configuration model.
+
+        A basic implementation would be: `return MySandboxEnvironmentConfig(**config)`
+
+        Args:
+          config: Configuration dictionary produced by serializing the configuration
+            model.
+
+        Returns:
+          The sandbox-specific configuration model.
+        """
+        raise NotImplementedError(
+            "The SandboxEnvironment provider has not implemented config_deserialize."
+        )
+
 
 @dataclass
 class SandboxEnvironments:
@@ -280,19 +368,34 @@ class SandboxEnvironments:
     """
 
 
-class SandboxEnvironmentSpec(NamedTuple):
+class SandboxEnvironmentSpec(BaseModel, frozen=True):
     """Specification of a SandboxEnvironment."""
 
     type: str
     """Sandbox type (e.g. 'local', 'docker')"""
 
-    config: SandboxEnvironmentConfigType | None = None
+    # Any is used to prevent Pydantic from trying to initialise a BaseModel.
+    config: Annotated[Any, "BaseModel, str or None"] = None
     """Sandbox configuration (filename or config object)."""
+
+    def __init__(self, type: str, config: BaseModel | str | None = None):
+        super().__init__(type=type, config=config)
+
+    @model_validator(mode="before")
+    @classmethod
+    def load_config_model(cls, data: dict[str, Any]) -> dict[str, Any]:
+        type = data["type"]
+        config = data.get("config")
+        # Pydantic won't know what concrete type to instantiate for config, so
+        # ask the relevant sandbox environment to deserialize it.
+        if isinstance(config, dict) and len(config) > 0:
+            data["config"] = deserialize_sandbox_specific_config(type, config)
+        return data
 
 
 SandboxEnvironmentConfigType = BaseModel | str
 
-SandboxEnvironmentType = SandboxEnvironmentSpec | str | tuple[str, str]
+SandboxEnvironmentType = str | tuple[str, str] | SandboxEnvironmentSpec
 """SandboxEnvironmentSpec and str and tuple shorthands for it.
 
 A plain str, e.g. "docker", is equivalent to SandboxEnvironmentSpec("docker")
@@ -312,3 +415,24 @@ def resolve_sandbox_environment(
         return SandboxEnvironmentSpec(sandbox[0], sandbox[1])
     else:
         return None
+
+
+def deserialize_sandbox_specific_config(
+    type: str, config: dict[str, Any]
+) -> BaseModel | dict[str, Any]:
+    # Avoid circular import
+    from inspect_ai.util._sandbox.registry import registry_find_sandboxenv
+
+    try:
+        sandboxenv_type = registry_find_sandboxenv(type)
+    except ValueError:
+        warn_once(
+            logger,
+            f"Could not find sandbox environment plugin for type '{type}'. "
+            "Ensure the plugin is installed in your environment.",
+        )
+        return config
+    config_deserialize = cast(
+        ConfigDeserialize, getattr(sandboxenv_type, "config_deserialize")
+    )
+    return config_deserialize(config)

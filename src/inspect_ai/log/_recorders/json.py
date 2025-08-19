@@ -3,13 +3,14 @@ from typing import Any, Literal, get_args
 
 import ijson  # type: ignore
 from ijson import IncompleteJSONError
+from ijson.backends.python import UnexpectedSymbol  # type: ignore
 from pydantic import BaseModel
 from pydantic_core import from_json
 from typing_extensions import override
 
-from inspect_ai._util.constants import LOG_SCHEMA_VERSION
+from inspect_ai._util.constants import DESERIALIZING_CONTEXT, LOG_SCHEMA_VERSION
 from inspect_ai._util.error import EvalError
-from inspect_ai._util.file import absolute_file_path, async_fileystem, file, filesystem
+from inspect_ai._util.file import FileSystem, absolute_file_path, file, filesystem
 from inspect_ai._util.trace import trace_action
 
 from .._log import (
@@ -96,6 +97,7 @@ class JSONRecorder(FileRecorder):
         results: EvalResults | None,
         reductions: list[EvalSampleReductions] | None,
         error: EvalError | None = None,
+        header_only: bool = False,
     ) -> EvalLog:
         log = self.data[self._log_file_key(spec)]
         log.data.status = status
@@ -122,18 +124,26 @@ class JSONRecorder(FileRecorder):
     @override
     @classmethod
     async def read_log(cls, location: str, header_only: bool = False) -> EvalLog:
+        fs = filesystem(location)
+
         if header_only:
+            # Fast path: header only
             try:
-                return _read_header_streaming(location)
+                log = _read_header_streaming(location)
+                if fs.is_s3():
+                    file_info = fs.info(location)
+                    log.etag = file_info.etag
+                return log
             # The Python JSON serializer supports NaN and Inf, however
             # this isn't technically part of the JSON spec. The json-stream
             # library shares this limitation, so if we fail with an
-            # invalid character then we move on and and parse w/ pydantic
+            # invalid character (or Unexpected symbol) then we move on and and parse w/ pydantic
             # (which does support NaN and Inf by default)
-            except (ValueError, IncompleteJSONError) as ex:
+            except (ValueError, IncompleteJSONError, UnexpectedSymbol) as ex:
                 if (
                     str(ex).find("Invalid JSON character") != -1
                     or str(ex).find("invalid char in json text") != -1
+                    or str(ex).find("Unexpected symbol") != -1
                 ):
                     pass
                 else:
@@ -143,7 +153,7 @@ class JSONRecorder(FileRecorder):
         with file(location, "r") as f:
             # parse w/ pydantic
             raw_data = from_json(f.read())
-            log = EvalLog(**raw_data)
+            log = EvalLog.model_validate(raw_data, context=DESERIALIZING_CONTEXT)
             log.location = location
 
             # fail for unknown version
@@ -162,39 +172,51 @@ class JSONRecorder(FileRecorder):
                     log.results.sample_reductions = None
                     log.reductions = None
 
-            # return log
+            if fs.is_s3():
+                file_info = fs.info(location)
+                log.etag = file_info.etag
+
             return log
 
     @override
     @classmethod
-    async def write_log(cls, location: str, log: EvalLog) -> None:
+    async def write_log(
+        cls, location: str, log: EvalLog, if_match_etag: str | None = None
+    ) -> None:
         from inspect_ai.log._file import eval_log_json
 
         # sort samples before writing as they can come in out of order
         if log.samples:
             sort_samples(log.samples)
 
+        fs = filesystem(location)
+        if fs.is_s3() and if_match_etag:
+            # Use S3 conditional write
+            await cls._write_log_s3_conditional(location, log, if_match_etag, fs)
+        else:
+            # Standard write
+            # get log as bytes
+            log_bytes = eval_log_json(log)
+
+            with trace_action(logger, "Log Write", location):
+                with file(location, "wb") as f:
+                    f.write(log_bytes)
+
+    @classmethod
+    async def _write_log_s3_conditional(
+        cls, location: str, log: EvalLog, etag: str, fs: FileSystem
+    ) -> None:
+        """Perform S3 conditional write using aioboto3."""
+        from inspect_ai.log._file import eval_log_json
+
+        from .eval import _s3_bucket_and_key, _write_s3_conditional
+
+        bucket, key = _s3_bucket_and_key(location)
+
         # get log as bytes
         log_bytes = eval_log_json(log)
 
-        with trace_action(logger, "Log Write", location):
-            # try to write async for async filesystems
-            written = False
-            try:
-                fs = filesystem(location)
-                if fs.is_async():
-                    async with async_fileystem(location) as async_fs:
-                        await async_fs._pipe_file(location, log_bytes)
-                        written = True
-            except Exception as ex:
-                logger.warning(
-                    f"Error occurred during async write to {location}: {ex}. Falling back to sync write."
-                )
-
-            # otherwise use sync
-            if not written:
-                with file(location, "wb") as f:
-                    f.write(log_bytes)
+        await _write_s3_conditional(fs, bucket, key, log_bytes, etag, location, logger)
 
 
 def _validate_version(ver: int) -> None:
@@ -232,6 +254,11 @@ def _read_header_streaming(log_file: str) -> EvalLog:
 
         # Parse the log file, stopping before parsing samples
         status: Literal["started", "success", "cancelled", "error"] | None = None
+        eval: EvalSpec | None = None
+        plan: EvalPlan | None = None
+        results: EvalResults | None = None
+        stats: EvalStats | None = None
+        error: EvalError | None = None
         for k, v in ijson.kvitems(f, ""):
             if k == "status":
                 assert v in get_args(
@@ -254,6 +281,9 @@ def _read_header_streaming(log_file: str) -> EvalLog:
                 break
 
     assert status, "Must encounter a 'status'"
+    assert eval, "Must encounter a 'eval'"
+    assert plan, "Must encounter a 'plan'"
+    assert stats, "Must encounter a 'stats'"
 
     return EvalLog(
         eval=eval,

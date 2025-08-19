@@ -1,9 +1,13 @@
 from random import Random
+from typing import Any
 
 import pytest
 from test_helpers.utils import simple_task_state
 
+from inspect_ai import Task, eval
+from inspect_ai.dataset._dataset import MemoryDataset, Sample
 from inspect_ai.model import ChatMessageAssistant, ChatMessageUser, ModelOutput
+from inspect_ai.model._model import get_model
 from inspect_ai.scorer._choice import choice
 from inspect_ai.scorer._metric import CORRECT
 from inspect_ai.scorer._target import Target
@@ -11,14 +15,14 @@ from inspect_ai.solver import MultipleChoiceTemplate, TaskState, multiple_choice
 from inspect_ai.solver._task_state import Choice
 
 
-async def generate(state: TaskState) -> TaskState:
+async def generate(state: TaskState, **kwargs: Any) -> TaskState:
     state.messages.append(ChatMessageAssistant(content="ANSWER: A"))
     state.output = ModelOutput.from_content(model="model", content="ANSWER: A")
     return state
 
 
 def generate_for_multiple_correct(answers: str):
-    async def generate(state: TaskState) -> TaskState:
+    async def generate(state: TaskState, **kwargs: Any) -> TaskState:
         state.messages.append(ChatMessageAssistant(content=answers))
         state.output = ModelOutput.from_content(model="model", content=answers)
         return state
@@ -26,7 +30,7 @@ def generate_for_multiple_correct(answers: str):
     return generate
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_raises_exception_if_no_choices():
     solver = multiple_choice()
     state = simple_task_state()
@@ -36,7 +40,7 @@ async def test_raises_exception_if_no_choices():
         await solver(state=state, generate=generate)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_single_multiple_choice():
     solver = multiple_choice()
     state = simple_task_state(
@@ -53,7 +57,7 @@ async def test_single_multiple_choice():
     assert new_state.choices[0].correct is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_maps_choices_without_shuffling():
     solver = multiple_choice()
     state = simple_task_state(
@@ -76,7 +80,32 @@ async def test_maps_choices_without_shuffling():
     ]
 
 
-@pytest.mark.asyncio
+def test_more_than_26_choices():
+    dataset = MemoryDataset(
+        samples=[
+            Sample(
+                input="Please make the right choice",
+                choices=[chr(i) for i in range(ord("A"), ord("Z") + 1)]
+                + [str(i) for i in range(1, 10)],
+                target="5",
+            )
+        ]
+    )
+    dataset.shuffle_choices(seed=42)
+    task = Task(dataset=dataset, solver=multiple_choice(), scorer=choice())
+    log = eval(
+        task,
+        model=get_model(
+            "mockllm/model",
+            custom_outputs=[ModelOutput.from_content("mockllm/model", "ANSWER: Q")],
+        ),
+    )[0]
+    assert log.status == "success"
+    assert log.results
+    assert log.results.scores[0].metrics["accuracy"].value == 1.0
+
+
+@pytest.mark.anyio
 async def test_custom_template():
     solver = multiple_choice(template="Do this thing: {question} {choices}")
     state = simple_task_state(
@@ -94,7 +123,55 @@ async def test_custom_template():
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
+async def test_trailing_punctuation_whitespace():
+    async def generate_trailing_punctuation(
+        state: TaskState, **kwargs: Any
+    ) -> TaskState:
+        state.messages.append(ChatMessageAssistant(content="ANSWER: A. \n"))
+        state.output = ModelOutput.from_content(model="model", content="ANSWER: A. \n")
+        return state
+
+    solver = multiple_choice()
+    state = simple_task_state(
+        choices=["choice 1", "choice 2", "choice 3"],
+        messages=[ChatMessageUser(content="What's the answer?", source="input")],
+    )
+    new_state = await solver(state=state, generate=generate_trailing_punctuation)
+
+    assert new_state.output.completion == "ANSWER: A. \n"
+    assert choices_marked_correct(new_state.choices) == {"choice 1"}
+
+
+@pytest.mark.anyio
+async def test_multiple_trailing_punctuation_whitespace():
+    async def generate_1(state: TaskState, **kwargs: Any) -> TaskState:
+        state.messages.append(ChatMessageAssistant(content="ANSWER: A, C. \n"))
+        state.output = ModelOutput.from_content(
+            model="model", content="ANSWER: A, C. \n"
+        )
+        return state
+
+    async def generate_2(state: TaskState, **kwargs: Any) -> TaskState:
+        state.messages.append(ChatMessageAssistant(content="ANSWER: A and C. \n"))
+        state.output = ModelOutput.from_content(
+            model="model", content="ANSWER: A and C. \n"
+        )
+        return state
+
+    solver = multiple_choice(multiple_correct=True)
+    state = simple_task_state(
+        choices=["choice 1", "choice 2", "choice 3"],
+        messages=[ChatMessageUser(content="What's the answer?", source="input")],
+    )
+    new_state1 = await solver(state=state, generate=generate_1)
+    new_state2 = await solver(state=state, generate=generate_2)
+
+    assert choices_marked_correct(new_state1.choices) == {"choice 1", "choice 3"}
+    assert choices_marked_correct(new_state2.choices) == {"choice 1", "choice 3"}
+
+
+@pytest.mark.anyio
 async def test_custom_template_raises_with_missing_fields():
     with pytest.raises(
         ValueError,
@@ -103,9 +180,9 @@ async def test_custom_template_raises_with_missing_fields():
         multiple_choice(template="This template lacks substance")
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_can_shuffle_choices_when_calling_the_model():
-    async def generate_shuffled(state: TaskState):
+    async def generate_shuffled(state: TaskState, **kwargs: Any):
         # Ensure that the choices are shuffled before we call the model
         assert "A) choice 3" in state.user_prompt.text
         assert "B) choice 2" in state.user_prompt.text
@@ -142,7 +219,7 @@ async def test_can_shuffle_choices_when_calling_the_model():
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_multiple_correct():
     generate = generate_for_multiple_correct(answers="ANSWER: AB")
     solver = multiple_choice(multiple_correct=True)
@@ -173,7 +250,7 @@ async def test_multiple_correct():
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_multiple_correct_model_generated_commas():
     generate = generate_for_multiple_correct(answers="ANSWER: B, C")
     solver = multiple_choice(multiple_correct=True)
@@ -204,12 +281,12 @@ async def test_multiple_correct_model_generated_commas():
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_multiple_shuffled_answers_one_answer():
     # Given the shuffling before calling generate, the actual answer is actually A
     actual_generate = generate_for_multiple_correct(answers="ANSWER: C")
 
-    async def generate_shuffled(state: TaskState):
+    async def generate_shuffled(state: TaskState, **kwargs: Any):
         # Ensure that the choices are shuffled before we call the model
         assert "A) choice 3" in state.user_prompt.text
         assert "B) choice 2" in state.user_prompt.text
@@ -245,12 +322,12 @@ async def test_multiple_shuffled_answers_one_answer():
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_multiple_shuffled_answers_more():
     # Given the shuffling before calling generate, the actual answers are B, C
     actual_generate = generate_for_multiple_correct(answers="ANSWER: A, D")
 
-    async def generate_shuffled(state: TaskState):
+    async def generate_shuffled(state: TaskState, **kwargs: Any):
         # Ensure that the choices are shuffled before we call the model
         assert "A) choice 3" in state.user_prompt.text
         assert "B) choice 1" in state.user_prompt.text
@@ -318,7 +395,7 @@ Therefore, the most likely main cause of zygote mortality in this scenario would
 ANSWER: D"""
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_cot_complex_text():
     # Tests and end to end multiple choice generate and score
     # with a real cot response that can trick our answer parsing
@@ -329,7 +406,7 @@ async def test_cot_complex_text():
         messages=[ChatMessageUser(content="What's the answer?", source="input")],
     )
 
-    async def generate_cot_text(state: TaskState) -> TaskState:
+    async def generate_cot_text(state: TaskState, **kwargs: Any) -> TaskState:
         state.messages.append(ChatMessageAssistant(content=cot_complex))
         state.output = ModelOutput.from_content(model="model", content=cot_complex)
         return state
@@ -342,3 +419,80 @@ async def test_cot_complex_text():
 
     assert result.value == CORRECT
     assert result.answer == "D"
+
+
+def choices_marked_correct(choices: list[Choice]) -> set[str]:
+    """Helper function"""
+    return set([choice.value for choice in choices if choice.correct])
+
+
+@pytest.mark.anyio
+async def test_none_of_the_above_should_not_mark_choices():
+    async def generate_none_of_above(state: TaskState, **kwargs: Any) -> TaskState:
+        content = "ANSWER: None of the above"
+        state.messages.append(ChatMessageAssistant(content=content))
+        state.output = ModelOutput.from_content(model="model", content=content)
+        return state
+
+    solver = multiple_choice()
+    state = simple_task_state(
+        choices=["Option A", "Option B", "Option C", "Option D"],
+        messages=[ChatMessageUser(content="What's the answer?", source="input")],
+    )
+
+    new_state = await solver(state=state, generate=generate_none_of_above)
+
+    assert choices_marked_correct(new_state.choices) == set()
+
+
+@pytest.mark.anyio
+async def test_dont_know_should_not_mark_choices():
+    async def generate_dont_know(state: TaskState, **kwargs: Any) -> TaskState:
+        content = "ANSWER: Don't know"
+        state.messages.append(ChatMessageAssistant(content=content))
+        state.output = ModelOutput.from_content(model="model", content=content)
+        return state
+
+    solver = multiple_choice()
+    state = simple_task_state(
+        choices=["Option A", "Option B", "Option C", "Option D"],
+        messages=[ChatMessageUser(content="What's the answer?", source="input")],
+    )
+
+    new_state = await solver(state=state, generate=generate_dont_know)
+
+    assert choices_marked_correct(new_state.choices) == set()
+
+    # No false positives when scoring
+    scorer = choice()
+    result = await scorer(new_state, Target("D"))
+    assert result.value != CORRECT  # Should not be marked as correct
+
+
+@pytest.mark.anyio
+async def test_i_dont_know_should_not_mark_choices():
+    async def generate_i_dont_know(state: TaskState, **kwargs: Any) -> TaskState:
+        content = "ANSWER: I don't know"
+        state.messages.append(ChatMessageAssistant(content=content))
+        state.output = ModelOutput.from_content(model="model", content=content)
+        return state
+
+    solver = multiple_choice()
+    state = simple_task_state(
+        choices=[
+            "Option A",
+            "Option B",
+            "Option C",
+            "Option D",
+            "Option E",
+            "Option F",
+            "Option G",
+            "Option H",
+            "Option I",
+        ],
+        messages=[ChatMessageUser(content="What's the answer?", source="input")],
+    )
+
+    new_state = await solver(state=state, generate=generate_i_dont_know)
+
+    assert choices_marked_correct(new_state.choices) == set()

@@ -8,7 +8,11 @@ title: "inspect_ai.model"
 ### Model
 ### GenerateConfig
 ### GenerateConfigArgs
+### BatchConfig
+### ResponseSchema
 ### ModelOutput
+### ModelCall
+### ModelConversation
 ### ModelUsage
 ### StopReason
 ### ChatCompletionChoice
@@ -21,14 +25,33 @@ title: "inspect_ai.model"
 ### ChatMessageUser
 ### ChatMessageAssistant
 ### ChatMessageTool
+### trim_messages
+### user_prompt
 
 ## Content
 
 ### Content
 ### ContentText
+### ContentReasoning
 ### ContentImage
 ### ContentAudio
 ### ContentVideo
+### ContentDocument
+### ContentData
+### ContentToolUse
+
+## Citation
+
+### Citation
+### CitationBase
+### UrlCitation
+### DocumentCitation
+### ContentCitation
+
+## Tools
+
+### execute_tools
+### ExecuteToolsResult
 
 ## Logprobs
 
@@ -44,6 +67,11 @@ title: "inspect_ai.model"
 ### cache_list_expired
 ### cache_prune
 ### cache_path
+
+## Conversion
+
+### messages_to_openai
+### messages_from_openai
 
 ## Provider
 

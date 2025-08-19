@@ -132,7 +132,7 @@ def _make_title_basic(ctx: click.Context, depth: int) -> Iterator[str]:
 def _make_title_full_command_path(ctx: click.Context, depth: int) -> Iterator[str]:
     """Create the markdown heading for a command, showing the full command path.
 
-    This style accomodates nested commands by showing:
+    This style accommodates nested commands by showing:
     * The full command path for headers and permalinks (eg `# git commit` and `http://localhost:8000/#git-commit`)
     * The command leaf name only for TOC entries (eg `* commit`).
 
@@ -187,7 +187,7 @@ def _make_usage(ctx: click.Context) -> Iterator[str]:
     # Gets the usual 'Usage' string without the prefix.
     formatter = ctx.make_formatter()
     pieces = ctx.command.collect_usage_pieces(ctx)
-    formatter.write_usage(ctx.command_path, " ".join(pieces), prefix="")
+    formatter.write_usage(ctx.command_path.replace("_", "-"), " ".join(pieces), prefix="")
     usage = formatter.getvalue().rstrip("\n")
 
     yield "#### Usage"

@@ -3,6 +3,7 @@ from typing import (
     Any,
     Callable,
     NamedTuple,
+    Sequence,
 )
 
 from inspect_ai._util.registry import (
@@ -13,7 +14,15 @@ from inspect_ai._util.registry import (
     set_registry_params,
 )
 
-from ._tool import TOOL_MODEL_INPUT, TOOL_PARALLEL, TOOL_PROMPT, TOOL_VIEWER, Tool
+from ._tool import (
+    TOOL_MODEL_INPUT,
+    TOOL_OPTIONS,
+    TOOL_PARALLEL,
+    TOOL_PROMPT,
+    TOOL_VIEWER,
+    Tool,
+    ToolSource,
+)
 from ._tool_call import ToolCallModelInput, ToolCallViewer
 from ._tool_description import (
     ToolDescription,
@@ -21,7 +30,7 @@ from ._tool_description import (
     tool_description,
 )
 from ._tool_info import parse_tool_info
-from ._tool_params import ToolParams
+from ._tool_params import ToolParam, ToolParams
 
 
 class ToolDef:
@@ -36,6 +45,7 @@ class ToolDef:
         parallel: bool | None = None,
         viewer: ToolCallViewer | None = None,
         model_input: ToolCallModelInput | None = None,
+        options: dict[str, object] | None = None,
     ) -> None:
         """Create a tool definition.
 
@@ -51,6 +61,8 @@ class ToolDef:
           viewer: Optional tool call viewer implementation.
           model_input: Optional function that determines how
               tool call results are played back as model input.
+          options: Optional property bag that can be used by the model provider
+              to customize the implementation of the tool
 
         Returns:
           Tool definition.
@@ -74,6 +86,7 @@ class ToolDef:
             self.parallel = parallel if parallel is not None else tdef.parallel
             self.viewer = viewer or tdef.viewer
             self.model_input = model_input or tdef.model_input
+            self.options = options or tdef.options
 
         # if its not a tool then extract tool_info if all fields have not
         # been provided explicitly
@@ -104,6 +117,7 @@ class ToolDef:
             self.parallel = parallel is not False
             self.viewer = viewer
             self.model_input = model_input
+            self.options = options
 
     tool: Callable[..., Any]
     """Callable to execute tool."""
@@ -126,13 +140,20 @@ class ToolDef:
     model_input: ToolCallModelInput | None
     """Custom model input presenter for tool calls."""
 
+    options: dict[str, object] | None = None
+    """Optional property bag that can be used by the model provider to customize the implementation of the tool"""
+
     def as_tool(self) -> Tool:
         """Convert a ToolDef to a Tool."""
         tool = self.tool
         info = RegistryInfo(
             type="tool",
             name=self.name,
-            metadata={TOOL_PARALLEL: self.parallel, TOOL_VIEWER: self.viewer},
+            metadata={
+                TOOL_PARALLEL: self.parallel,
+                TOOL_VIEWER: self.viewer,
+                TOOL_OPTIONS: self.options,
+            },
         )
         set_registry_info(tool, info)
         set_registry_params(tool, {})
@@ -157,10 +178,21 @@ def apply_description_overrides(target: ToolParams, overrides: dict[str, str]) -
         target.properties[param].description = value
 
 
-def tool_defs(
-    tools: list[Tool] | list[ToolDef] | list[Tool | ToolDef],
+async def tool_defs(
+    tools: Sequence[Tool | ToolDef | ToolSource] | ToolSource,
 ) -> list[ToolDef]:
-    return [ToolDef(tool) if isinstance(tool, Tool) else tool for tool in tools]
+    if isinstance(tools, ToolSource):
+        tools = await tools.tools()
+
+    tool_defs: list[ToolDef] = []
+    for tool in tools:
+        if isinstance(tool, ToolSource):
+            tool_defs.extend([ToolDef(t) for t in await tool.tools()])
+        elif not isinstance(tool, ToolDef):
+            tool_defs.append(ToolDef(tool))
+        else:
+            tool_defs.append(tool)
+    return tool_defs
 
 
 class ToolDefFields(NamedTuple):
@@ -170,11 +202,12 @@ class ToolDefFields(NamedTuple):
     parallel: bool
     viewer: ToolCallViewer | None
     model_input: ToolCallModelInput | None
+    options: dict[str, object] | None
 
 
 def tool_def_fields(tool: Tool) -> ToolDefFields:
     # get tool_info
-    name, prompt, parallel, viewer, model_input = tool_registry_info(tool)
+    name, prompt, parallel, viewer, model_input, options = tool_registry_info(tool)
     tool_info = parse_tool_info(tool)
 
     # if there is a description then append any prompt to the
@@ -194,17 +227,7 @@ def tool_def_fields(tool: Tool) -> ToolDefFields:
         raise ValueError(f"Description not provided for tool function '{name}'")
 
     # validate that we have types/descriptions for paramters
-    for param_name, param in tool_info.parameters.properties.items():
-
-        def raise_not_provided_error(context: str) -> None:
-            raise ValueError(
-                f"{context} not provided for parameter '{param_name}' of tool function '{name}'."
-            )
-
-        if param.type is None and not param.anyOf and not param.enum:
-            raise_not_provided_error("Unsupported type or type annotation")
-        elif not param.description:
-            raise_not_provided_error("Description")
+    validate_tool_parameters(name, tool_info.parameters.properties)
 
     # see if the user has overriden any of the tool's descriptions
     desc = tool_description(tool)
@@ -225,16 +248,44 @@ def tool_def_fields(tool: Tool) -> ToolDefFields:
         parallel=parallel,
         viewer=viewer,
         model_input=model_input,
+        options=options,
     )
 
 
 def tool_registry_info(
     tool: Tool,
-) -> tuple[str, str | None, bool, ToolCallViewer | None, ToolCallModelInput | None]:
+) -> tuple[
+    str,
+    str | None,
+    bool,
+    ToolCallViewer | None,
+    ToolCallModelInput | None,
+    dict[str, object] | None,
+]:
     info = registry_info(tool)
     name = info.name.split("/")[-1]
     prompt = info.metadata.get(TOOL_PROMPT, None)
     parallel = info.metadata.get(TOOL_PARALLEL, True)
     viewer = info.metadata.get(TOOL_VIEWER, None)
     model_input = info.metadata.get(TOOL_MODEL_INPUT, None)
-    return name, prompt, parallel, viewer, model_input
+    options = info.metadata.get(TOOL_OPTIONS, None)
+    return name, prompt, parallel, viewer, model_input, options
+
+
+def validate_tool_parameters(tool_name: str, parameters: dict[str, ToolParam]) -> None:
+    # validate that we have types/descriptions for paramters
+    for param_name, param in parameters.items():
+
+        def raise_not_provided_error(
+            context: str,
+            # Use the default value trick to avoid Python's late binding of
+            # closures issue.
+            # see: https://docs.python.org/3/faq/programming.html#why-do-lambdas-defined-in-a-loop-with-different-values-all-return-the-same-result
+            bound_name: str = param_name,
+        ) -> None:
+            raise ValueError(
+                f"{context} provided for parameter '{bound_name}' of function '{tool_name}'."
+            )
+
+        if not param.description:
+            raise_not_provided_error("Description not")

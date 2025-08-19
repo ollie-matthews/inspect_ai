@@ -1,5 +1,3 @@
-import os
-
 from inspect_ai._util.error import pip_dependency_error
 from inspect_ai._util.version import verify_required_version
 
@@ -16,7 +14,7 @@ from .._registry import modelapi
 def groq() -> type[ModelAPI]:
     FEATURE = "Groq API"
     PACKAGE = "groq"
-    MIN_VERSION = "0.16.0"
+    MIN_VERSION = "0.28.0"
 
     # verify we have the package
     try:
@@ -44,11 +42,22 @@ def openai() -> type[ModelAPI]:
     return OpenAIAPI
 
 
+@modelapi(name="openai-api")
+def openai_api() -> type[ModelAPI]:
+    # validate
+    validate_openai_client("OpenAI Compatible API")
+
+    # in the clear
+    from .openai_compatible import OpenAICompatibleAPI
+
+    return OpenAICompatibleAPI
+
+
 @modelapi(name="anthropic")
 def anthropic() -> type[ModelAPI]:
     FEATURE = "Anthropic API"
     PACKAGE = "anthropic"
-    MIN_VERSION = "0.29.0"
+    MIN_VERSION = "0.52.0"
 
     # verify we have the package
     try:
@@ -65,44 +74,15 @@ def anthropic() -> type[ModelAPI]:
     return AnthropicAPI
 
 
-@modelapi(name="vertex")
-def vertex() -> type[ModelAPI]:
-    FEATURE = "Google Vertex API"
-    PACKAGE = "google-cloud-aiplatform"
-    MIN_VERSION = "1.73.0"
-
-    # workaround log spam
-    # https://github.com/ray-project/ray/issues/24917
-    os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
-
-    # verify we have the package
-    try:
-        import vertexai  # type: ignore  # noqa: F401
-    except ImportError:
-        raise pip_dependency_error(FEATURE, [PACKAGE])
-
-    # verify version
-    verify_required_version(FEATURE, PACKAGE, MIN_VERSION)
-
-    # in the clear
-    from .vertex import VertexAPI
-
-    return VertexAPI
-
-
 @modelapi(name="google")
 def google() -> type[ModelAPI]:
     FEATURE = "Google API"
-    PACKAGE = "google-generativeai"
-    MIN_VERSION = "0.8.4"
-
-    # workaround log spam
-    # https://github.com/ray-project/ray/issues/24917
-    os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
+    PACKAGE = "google-genai"
+    MIN_VERSION = "1.16.1"
 
     # verify we have the package
     try:
-        import google.generativeai  # type: ignore  # noqa: F401
+        import google.genai  # type: ignore  # noqa: F401
     except ImportError:
         raise pip_dependency_error(FEATURE, [PACKAGE])
 
@@ -110,9 +90,9 @@ def google() -> type[ModelAPI]:
     verify_required_version(FEATURE, PACKAGE, MIN_VERSION)
 
     # in the clear
-    from .google import GoogleAPI
+    from .google import GoogleGenAIAPI
 
-    return GoogleAPI
+    return GoogleGenAIAPI
 
 
 @modelapi(name="hf")
@@ -129,10 +109,12 @@ def hf() -> type[ModelAPI]:
 
 @modelapi(name="vllm")
 def vllm() -> type[ModelAPI]:
-    try:
-        from .vllm import VLLMAPI
-    except ImportError:
-        raise pip_dependency_error("vLLM Models", ["vllm"])
+    # Only validate OpenAI compatibility (needed for the API interface)
+    validate_openai_client("vLLM API")
+
+    # Import VLLMAPI without checking for vllm package yet
+    # The actual vllm dependency will only be checked if needed to start a server
+    from .vllm import VLLMAPI
 
     return VLLMAPI
 
@@ -148,7 +130,7 @@ def cf() -> type[ModelAPI]:
 def mistral() -> type[ModelAPI]:
     FEATURE = "Mistral API"
     PACKAGE = "mistralai"
-    MIN_VERSION = "1.2.0"
+    MIN_VERSION = "1.9.3"
 
     # verify we have the package
     try:
@@ -187,6 +169,22 @@ def together() -> type[ModelAPI]:
     return TogetherAIAPI
 
 
+@modelapi(name="fireworks")
+def fireworks() -> type[ModelAPI]:
+    validate_openai_client("FireworksAI API")
+    from .fireworks import FireworksAIAPI
+
+    return FireworksAIAPI
+
+
+@modelapi(name="sambanova")
+def sambanova() -> type[ModelAPI]:
+    validate_openai_client("SambaNova API")
+    from .sambanova import SambaNovaAPI
+
+    return SambaNovaAPI
+
+
 @modelapi(name="ollama")
 def ollama() -> type[ModelAPI]:
     # validate
@@ -207,6 +205,17 @@ def openrouter() -> type[ModelAPI]:
     from .openrouter import OpenRouterAPI
 
     return OpenRouterAPI
+
+
+@modelapi(name="perplexity")
+def perplexity() -> type[ModelAPI]:
+    # validate
+    validate_openai_client("Perplexity API")
+
+    # in the clear
+    from .perplexity import PerplexityAPI
+
+    return PerplexityAPI
 
 
 @modelapi(name="llama-cpp-python")
@@ -250,6 +259,42 @@ def mockllm() -> type[ModelAPI]:
     return MockLLM
 
 
+@modelapi(name="sglang")
+def sglang() -> type[ModelAPI]:
+    # Only validate OpenAI compatibility (needed for the API interface)
+    validate_openai_client("SGLang API")
+
+    # Import SGLangAPI without checking for sglang package yet
+    # The actual sglang dependency will only be checked if needed to start a server
+    from .sglang import SGLangAPI
+
+    return SGLangAPI
+
+
+@modelapi(name="transformer_lens")
+def transformer_lens() -> type[ModelAPI]:
+    FEATURE = "TransformerLens API"
+    PACKAGE = "transformer_lens"
+
+    # verify we have the package
+    try:
+        import transformer_lens  # type: ignore # noqa: F401
+    except ImportError:
+        raise pip_dependency_error(FEATURE, [PACKAGE])
+
+    # in the clear
+    from .transformer_lens import TransformerLensAPI
+
+    return TransformerLensAPI
+
+
+@modelapi(name="none")
+def none() -> type[ModelAPI]:
+    from .none import NoModel
+
+    return NoModel
+
+
 @modelapi("goodfire")
 def goodfire() -> type[ModelAPI]:
     """Get the Goodfire API provider."""
@@ -259,7 +304,7 @@ def goodfire() -> type[ModelAPI]:
 
     # verify we have the package
     try:
-        import goodfire  # noqa: F401
+        import goodfire  # type: ignore # noqa: F401
     except ImportError:
         raise pip_dependency_error(FEATURE, [PACKAGE])
 
@@ -267,15 +312,15 @@ def goodfire() -> type[ModelAPI]:
     verify_required_version(FEATURE, PACKAGE, MIN_VERSION)
 
     # in the clear
-    from .goodfire import GoodfireAPI
+    from .goodfire import GoodfireAPI  # type: ignore[attr-defined]
 
-    return GoodfireAPI
+    return GoodfireAPI  # type: ignore[no-any-return]
 
 
 def validate_openai_client(feature: str) -> None:
     FEATURE = feature
     PACKAGE = "openai"
-    MIN_VERSION = "1.58.1"
+    MIN_VERSION = "1.99.7"
 
     # verify we have the package
     try:

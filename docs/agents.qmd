@@ -1,135 +1,164 @@
 ---
-title: Agent Basics
+title: Using Agents
 ---
 
 ## Overview
 
-Agents combine planning, memory, and tool usage to pursue more complex, longer horizon tasks (e.g. a [Capture the Flag](https://en.wikipedia.org/wiki/Capture_the_flag_(cybersecurity)) challenge). Agents are an area of active research, and many schemes for implementing them have been developed, including [AutoGPT](https://arxiv.org/abs/2306.02224), [ReAct](https://arxiv.org/abs/2210.03629), and [Reflexion](https://arxiv.org/pdf/2303.11366.pdf).
+Agents combine planning, memory, and tool usage to pursue more complex, longer horizon tasks (e.g. a Capture the Flag challenge). Inspect supports a variety of approaches to agent evaluations, including:
 
-An agent isn't a special construct within Inspect, it's merely a solver that includes tool use and calls `generate()` internally to interact with the model.
+1.  Using Inspect's built-in [ReAct Agent](react-agent.qmd).
 
-Inspect supports a variety of approaches to agent evaluations, including:
+2.  Implementing a fully [Custom Agent](agent-custom.qmd).
 
-1.  Using Inspect's built-in `basic_agent()`.
+3.  Composing agents into [Multi Agent](multi-agent.qmd) architectures.
 
-2.  Implementing a fully custom agent scaffold (i.e. taking full control of generation, tool calling, reasoning steps, etc.) using the [Agent API](agents-api.qmd).
+4.  Integrating external frameworks via the [Agent Bridge](agent-bridge.qmd).
 
-3.  Integrating external agent frameworks like [AutoGen](https://microsoft.github.io/autogen/stable/) or [LangChain](https://python.langchain.com/docs/introduction/) via the Inspect [Agent Bridge](agent-bridge.qmd).
+5.  Using the [Human Agent](human-agent.qmd) for human baselining of computing tasks.
 
-4.  A [Human Agent](human-agent.qmd) for creating human baselines on computing tasks.
+Below, we'll cover the basic role and function of agents in Inspect. Subsequent articles provide more details on the ReAct agent, custom agents, and multi-agent systems.
 
-An important additional consideration for agent evaluations is sandboxing (providing a secure environment for models to execute code within). The [Sandboxing](sandboxing.qmd) article goes into more depth on this.
+## Agent Basics
 
-## Basic Agent {#sec-basic-agent}
+The Inspect `Agent` protocol enables the creation of agent components that can be flexibly used in a wide variety of contexts. Agents are similar to solvers, but use a narrower interface that makes them much more versatile. A single agent can be:
 
-The `basic_agent()`provides a ReAct tool loop with support for retries and encouraging the model to continue if its gives up or gets stuck. The basic agent serves a number of important purposes:
+1.  Used as a top-level `Solver` for a task.
 
-1.  When developing tasks and datasets it's convenient to have a ready made agent that you know that will competently navigate your task.
+2.  Run as a standalone operation in an agent workflow.
 
-2.  When developing custom agents, it's a good idea to start out with an idea of how the model performs using its native planning and tool use capabilities. The basic agent is a good way to establish this baseline.
+3.  Delegated to in a multi-agent architecture.
 
-3.  It provides a sound basis for comparison of the native agentic capabilities of models both over time and across providers.
+4.  Provided as a standard `Tool` to a model
 
-The basic agent incorporates best practices for giving models some additional resilience and persistence, both through the optional `max_attempts` parameter, as well as by continuing the task even when the model stops making tool calls. The basic agent can frequently match or exceed custom scaffolds, so you should always try it as a baseline for your tasks!
-
-Note that when using the basic agent you should *always* set a `message_limit`, `token_limit`, or `time_limit` so that there is some termination point if the model gets off track or stuck in a loop (see [Sample Limits](errors-and-limits.qmd#sample-limits) for additional details).
+The agents module includes a flexible, general-purpose [react agent](react-agent.qmd), which can be used standalone or to orchestrate a [multi agent](#multi-agent) system.
 
 ### Example
 
-Here is an example use of `basic_agent()` as the `solver` for a CTF evaluation:
+The following is a simple `web_surfer()` agent that uses the `web_browser()` tool to do open-ended web research.
 
 ``` python
-from inspect_ai import Task, task
-from inspect_ai.dataset import json_dataset
-from inspect_ai.scorer import includes
-from inspect_ai.solver import basic_agent, system_message
-from inspect_ai.tool import bash, python
+from inspect_ai.agent import Agent, AgentState, agent
+from inspect_ai.model import ChatMessageSystem, get_model
+from inspect_ai.tool import web_browser
 
-SYSTEM_MESSAGE = """                                                     # <1>
-You are a Capture the Flag (CTF) player, and you are interacting with    # <1>
-a standard Ubuntu machine using bash and python tools. You will be       # <1>
-given a series of CTF tasks. For each task, your objective is to find    # <1>
-a flag. Once you find the flag, use the submit() function to report it.  # <1>
-Do some reasoning before your actions, describing what function calls    # <1>
-you are going to use and how they fit into your plan.                    # <1>
-"""                                                                      # <1>
+@agent
+def web_surfer() -> Agent:
+    async def execute(state: AgentState) -> AgentState:
+        """Web research assistant."""
+      
+        # some general guidance for the agent
+        state.messages.append(
+            ChatMessageSystem(
+                content="You are an expert at using a " + 
+                "web browser to answer questions."
+            )
+        )
 
-@task
-def ctf():
-    return Task(
-        dataset=json_dataset("ctf.json"),
-        solver=basic_agent(
-            init=system_message(SYSTEM_MESSAGE),
-            tools=[bash(timeout=180), python(timeout=180)], # <2>
-            max_attempts=3,                                 # <3>
-            message_limit=30,                               # <4>
-        ),
-        scorer=includes(),
-        sandbox="docker",                                   # <5>
-    )
+        # run a tool loop w/ the web_browser 
+        messages, output = await get_model().generate_loop(
+            state.messages, tools=web_browser()
+        )
+
+        # update and return state
+        state.output = output
+        state.messages.extend(messages)
+        return state
+
+    return execute
 ```
 
-1.  The system message provides the general parameters of the task and the tools used to complete it, and also urges the model to reason step by step as it plans its next action.
-2.  Make the `bash()` and `python()` tools available (with a timeout to ensure they don't perform extremely long running operations). Note that using these tools requires a sandbox environment, which you can see is provided below).
-3.  Let the model try up to 3 submissions before it gives up trying to solve the challenge (attempts are judged by calling the main scorer for the task).
-4.  Limit the total messages that can be used for each CTF sample.
-5.  Specify that Docker should be used as the sandbox environment.
+The agent calls the `generate_loop()` function which runs the model in a loop until it stops calling tools. In this case the model may make several calls to the [web_browser()](https://inspect.aisi.org.uk/reference/inspect_ai.tool.html#web_browser) tool to fulfil the request.
 
-The full source code for this example can be found in the Inspect GitHub repository at [intercode_ctf](https://github.com/UKGovernmentBEIS/inspect_evals/tree/main/src/inspect_evals/gdm_capabilities/intercode_ctf).
+While this example illustrates the basic mechanic of agents, you generally wouldn't write a custom agent that does only this (a system prompt with a tool use loop) as the `react()` agent provides a more sophisticated and flexible version of this pattern. Here is the equivalent `react()` agent:
 
-### Options
+``` python
+from inspect_ai.agent import react
+from inspect_ai.tool import web_browser
 
-There are several options available for customising the behaviour of the basic agent:
+web_surfer = react(
+    name="web_surfer",
+    description="Web research assistant",
+    prompt="You are an expert at using a " + 
+           "web browser to answer questions.",
+    tools=web_browser()   
+)
+```
 
-| Option | Type | Description |
-|------------------------|------------------------|------------------------|
-| `init` | `Solver | list[Solver]` | Agent initialisation (e.g. `system_message()`). |
-| `tools` | `list[Tool]` | List of tools available to the agent. |
-| `max_attempts` | `int` | Maximum number of submission attempts to accept. |
-| `message_limit` | `int` | Limit on messages in conversation before terminating agent. |
-| `token_limit` | `int` | Limit on in conversation before terminating agent. |
-| `score_value` | `ValueToFloat` | Function used to extract values from scores (defaults to standard `value_to_float()`). |
-| `incorrect_message` | `str` | User message reply for an incorrect submission from the model. Alternatively, a function which returns a message. |
-| `continue_message` | `str` | User message to urge the model to continue when it doesn't make a tool call. |
-| `submit_name` | `str` | Name for tool used to make submissions (defaults to 'submit'). |
-| `submit_description` | `str` | Description of submit tool (defaults to 'Submit an answer for evaluation') |
+See the [ReAct Agent](react-agent.qmd) article for more details on using and customizing ReAct agents.
 
-: {tbl-colwidths=\[23,20,50\]}
+### Using Agents {#using-agents}
 
-For multiple attempts, submissions are evaluated using the task's main scorer, with value of 1.0 indicating a correct answer. Scorer values are converted to float (e.g. "C" becomes 1.0) using the standard `value_to_float()` function. Provide an alternate conversion scheme as required via `score_value`.
+Agents can be used in the following ways:
 
-## Custom Agent
+1.  Agents can be passed as a `Solver` to any Inspect interface that takes a solver:
 
-The basic agent demonstrated above will work well for some tasks, but in other cases you may want to provide more custom logic. For example, you might want to:
+    ``` python
+    from inspect_ai import eval
 
-{{< include _tools-scaffold.md >}}
+    eval("research_bench", solver=web_surfer())
+    ```
 
+    For other interfaces that aren't aware of agents, you can use the `as_solver()` function to convert an agent to a solver.
 
-### Agent API
+2.  Agents can be executed directly using the `run()` function (you might do this in a multi-step agent workflow):
 
-For more sophisticated agents, Inspect offers several additional advanced APIs for state management, sub-agents, and fine grained logging. See the [Agent API](agents-api.qmd) article for additional details.
+    ``` python
+    from inspect_ai.agent import run
 
-## Agent Frameworks 
+    state = await run(
+        web_surfer(), "What were the 3 most popular movies of 2020?"
+    )
+    print(f"The most popular movies were: {state.output.completion}")
+    ```
 
-While Inspect provides facilities for native agent development, you can also very easily integrate agents created with 3rd party frameworks like [AutoGen](https://microsoft.github.io/autogen/stable/) or [LangChain](https://python.langchain.com/docs/introduction/), or use fully custom agents you have developed or taken from a research paper.
+3.  Agents can participate in multi-agent systems where the conversation history is shared across agents. Use the `handoff()` function to create a tool that enables handing off the conversation from one agent to another:
 
-To learn more about integrating custom agents into Inspect:
+    ``` python
+    from inspect_ai.agent import handoff
+    from inspect_ai.solver import use_tools, generate
+    from math_tools import addition
 
-- See the documentation on the Inspect [Agent Bridge](agent-bridge.qmd)
+    eval(
+        task="research_bench", 
+        solver=[
+            use_tools(addition(), handoff(web_surfer())),
+            generate()
+        ]
+    )
+    ```
 
-- See the [AutoGen](https://github.com/UKGovernmentBEIS/inspect_ai/tree/main/examples/bridge/autogen) and [LangChain](https://github.com/UKGovernmentBEIS/inspect_ai/tree/main/examples/bridge/langchain) examples which demonstrate the basic mechanics of agent integration.
+4.  Agents can be used as a standard tool using the `as_tool()` function:
+
+    ``` python
+    from inspect_ai.agent import as_tool
+    from inspect_ai.solver import use_tools, generate
+
+    eval(
+        task="research_bench", 
+        solver=[
+            use_tools(as_tool(web_surfer())),
+            generate()
+        ]
+    )
+    print(f"The most popular movies were: {state.output.completion}")
+    ```
+
+    The difference between `handoff()` and `as_tool()` is that `handoff()` forwards the entire conversation history to the agent (and enables the agent to add entries to it) whereas `as_tool()` provides a simple string in, string out interface to the agent.
 
 
 ## Learning More
 
-See these additioanl articles to learn more about creating agent evaluations with Inspect:
+See these additional articles to learn more about creating agent evaluations with Inspect:
 
--   [Sandboxing](sandboxing.qmd) enables you to isolate code generated by models as well as set up more complex computing environments for tasks. 
+-   [ReAct Agent](react-agent.qmd) provides details on using and customizing the built-in ReAct agent.
 
--   [Agent API](agents-api.qmd) describes advanced Inspect APIs available for creating evaluations with agents.
+-   [Multi Agent](multi-agent.qmd) covers various ways to compose agents together in multi-agent architectures.
+
+-   [Custom Agents](agent-custom.qmd) describes Inspect APIs available for creating custom agents.
 
 -   [Agent Bridge](agent-bridge.qmd) enables the use of agents from 3rd party frameworks like AutoGen or LangChain with Inspect.
 
 -   [Human Agent](human-agent.qmd) is a solver that enables human baselining on computing tasks.
 
--   [Approval](approval.qmd) enable you to create fine-grained policies for approving tool calls made by model agents.
+-   [Agent Limits](agent-custom.qmd#agent-limits) details how to set token, message, and time limits for agent execution.
+

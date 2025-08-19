@@ -8,22 +8,21 @@ from typing import (
     Iterator,
     Sequence,
     Type,
-    TypeVar,
     Union,
     overload,
 )
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 from typing_extensions import override
 
+from inspect_ai._util.answer import answer_character, answer_index
+from inspect_ai._util.metadata import MT, metadata_as
 from inspect_ai.model import ChatMessage
 from inspect_ai.util import SandboxEnvironmentSpec, SandboxEnvironmentType
 from inspect_ai.util._sandbox.environment import resolve_sandbox_environment
 
 if TYPE_CHECKING:
     from _typeshed import SupportsRichComparison
-
-MT = TypeVar("MT", bound=BaseModel)
 
 
 class Sample(BaseModel):
@@ -50,7 +49,6 @@ class Sample(BaseModel):
                 or narrative text to be used by a model grader.
             id: Optional. Unique identifier for sample.
             metadata: Optional. Arbitrary metadata associated with the sample.
-                sandbox (SandboxEnvironmentType | None): Sandbox environment type (or optionally a str or tuple with a shorthand spec)
             sandbox: Optional. Sandbox specification for this sample.
             files: Optional. Files that go along with the sample (copied to
                 SandboxEnvironment). Files can be paths, inline text, or inline binary (base64 encoded data URL).
@@ -308,7 +306,7 @@ class MemoryDataset(Dataset):
 
     @override
     def shuffle(self, seed: int | None = None) -> None:
-        if seed:
+        if seed is not None:
             random.Random(seed).shuffle(self.samples)
         else:
             random.shuffle(self.samples)
@@ -328,7 +326,9 @@ class MemoryDataset(Dataset):
             shuffled_choices = [sample.choices[i] for i in positions]
 
             # Map of original position / target letter
-            position_map = {i: chr(65 + new_i) for new_i, i in enumerate(positions)}
+            position_map = {
+                i: answer_character(new_i) for new_i, i in enumerate(positions)
+            }
 
             # Update to the shuffled choices and target
             sample.choices = shuffled_choices
@@ -338,9 +338,9 @@ class MemoryDataset(Dataset):
         self, target: str | list[str], position_map: dict[int, str]
     ) -> str | list[str]:
         if isinstance(target, list):
-            return [position_map[ord(t) - 65] for t in target]
+            return [position_map[answer_index(t)] for t in target]
         else:
-            return position_map[ord(target) - 65]
+            return position_map[answer_index(target)]
 
     @override
     def sort(
@@ -360,24 +360,3 @@ class MemoryDataset(Dataset):
             samples=[sample for sample in self if predicate(sample)],
             shuffled=self.shuffled,
         )
-
-
-def metadata_as(metadata: dict[str, Any], metadata_cls: Type[MT]) -> MT:
-    # validate that metadata_cls is frozen
-    if not metadata_cls.model_config.get("frozen", False):
-        raise ValueError(
-            f"Metadata model {metadata_cls.__name__} must have frozen=True"
-        )
-
-    # filter to only fields in the model
-    model_fields = {
-        k: v
-        for k, v in metadata.items()
-        if k in metadata_cls.__pydantic_fields__.keys()
-    }
-
-    # parse and return model instance
-    try:
-        return metadata_cls(**model_fields)
-    except ValidationError as ex:
-        raise ValueError(f"Could not parse metadata into {metadata_cls.__name__}: {ex}")

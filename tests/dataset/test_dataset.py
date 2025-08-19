@@ -30,6 +30,10 @@ dataset_md_params = [
     (param[0], param[1].replace(".", "-md.")) for param in dataset_params
 ]
 
+dataset_mcq_params = [
+    (param[0], param[1].replace(".", "-mcq.")) for param in dataset_params
+]
+
 
 # test reading a dataset using default configuration
 @pytest.mark.parametrize("type,file", dataset_params)
@@ -45,8 +49,8 @@ def test_dataset_fields(type: Type[T_ds], file: str) -> None:
         dataset_path(file), sample_fields=sample_field_spec
     )
     assert_sample(dataset[0])
-    assert isinstance(dataset[0].sandbox, tuple)
-    assert dataset[0].sandbox[0] == "docker"
+    assert isinstance(dataset[0].sandbox, BaseModel)
+    assert dataset[0].sandbox.type == "docker"
 
 
 # test reading a dataset with a custom data_to_sample function
@@ -125,6 +129,26 @@ def test_dataset_metadata_pydantic(type: Type[T_ds], file: str) -> None:
         )
 
 
+# test shuffling choices
+@pytest.mark.parametrize("type,file", dataset_mcq_params)
+def test_dataset_shuffle_choices_true_uses_no_seed(type: Type[T_ds], file: str) -> None:
+    dataset_1, dataset_2 = [
+        type.__call__(dataset_path(file), shuffle_choices=True) for _ in range(2)
+    ]
+    assert dataset_1[0].choices != dataset_2[0].choices
+
+
+# test explicitly not shuffling choices
+@pytest.mark.parametrize("type,file", dataset_mcq_params)
+def test_dataset_shuffle_choices_false_does_not_shuffle(
+    type: Type[T_ds], file: str
+) -> None:
+    dataset_1, dataset_2 = [
+        type.__call__(dataset_path(file), shuffle_choices=False) for _ in range(2)
+    ]
+    assert dataset_1[0].choices == dataset_2[0].choices
+
+
 @skip_if_github_action
 def test_dataset_read_id() -> None:
     dataset = example_dataset(
@@ -154,6 +178,12 @@ def test_dataset_auto_id() -> None:
     assert all(sample.id is None for sample in dataset)
     dataset = json_dataset(dataset_path("dataset.jsonl"), auto_id=True)
     assert [sample.id for sample in dataset] == [id for id in range(1, 11)]
+
+
+def test_dataset_zero_seed() -> None:
+    dataset1 = json_dataset(dataset_path("dataset.jsonl"), shuffle=True, seed=0)
+    dataset2 = json_dataset(dataset_path("dataset.jsonl"), shuffle=True, seed=0)
+    assert [s.target for s in dataset1] == [s.target for s in dataset2]
 
 
 sample_field_spec = FieldSpec(input="input", target="label", metadata=["extra"])

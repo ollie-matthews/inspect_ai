@@ -30,7 +30,7 @@ def log_command() -> None:
 
     The 'log' commands enable you to read Inspect logs uniformly as JSON no matter their physical storage format, and also enable you to read only the headers (everything but the samples) from log files, which is useful for very large logs.
 
-    Learn more about managing log files at https://inspect.ai-safety-institute.org.uk/eval-logs.html.
+    Learn more about managing log files at https://inspect.aisi.org.uk/eval-logs.html.
     """
     return None
 
@@ -199,6 +199,6 @@ def view_resource(file: str) -> str:
 
 
 def view_type_resource(file: str) -> str:
-    resource = PKG_PATH / "_view" / "www" / "src" / "types" / file
+    resource = PKG_PATH / "_view" / "www" / "src" / "@types" / file
     with open(resource, "r", encoding="utf-8") as f:
         return f.read()

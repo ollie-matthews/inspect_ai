@@ -1,4 +1,3 @@
-import asyncio
 import json
 from logging import getLogger
 from pathlib import PurePosixPath
@@ -9,8 +8,10 @@ from typing import (
     cast,
 )
 
+import anyio
 from pydantic import JsonValue
 
+from inspect_ai._util._async import coro_log_exceptions
 from inspect_ai.util._subprocess import ExecResult
 
 from .environment import SandboxEnvironment
@@ -39,18 +40,44 @@ async def sandbox_service(
     methods: list[SandboxServiceMethod] | dict[str, SandboxServiceMethod],
     until: Callable[[], bool],
     sandbox: SandboxEnvironment,
+    user: str | None = None,
+    started: anyio.Event | None = None,
 ) -> None:
     """Run a service that is callable from within a sandbox.
 
+    The service makes available a set of methods to a sandbox
+    for calling back into the main Inspect process.
+
+    To use the service from within a sandbox, either add it to the sys path
+    or use importlib. For example, if the service is named 'foo':
+
+    ```python
+    import sys
+    sys.path.append("/var/tmp/sandbox-services/foo")
+    import foo
+    ```
+
+    Or:
+
+    ```python
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "foo", "/var/tmp/sandbox-services/foo/foo.py"
+    )
+    foo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(foo)
+    ```
+
     Args:
-        name (str): Service name
-        methods (dict[str, SandboxServiceMethod]): Service methods.
-        until (Callable[[], bool]): Function used to check whether
-          the service should stop.
-        sandbox (SandboxEnvironment): Sandbox to publish service to.
+        name: Service name
+        methods: Service methods.
+        until: Function used to check whether the service should stop.
+        sandbox: Sandbox to publish service to.
+        user: User to login as. Defaults to the sandbox environment's default user.
+        started: Event to set when service has been started
     """
     # setup and start service
-    service = SandboxService(name, sandbox)
+    service = SandboxService(name, sandbox, user, started)
     if isinstance(methods, list):
         methods = {v.__name__: v for v in methods}
     for name, method in methods.items():
@@ -59,7 +86,7 @@ async def sandbox_service(
 
     # wait for and process methods
     while not until():
-        await asyncio.sleep(POLLING_INTERVAL)
+        await anyio.sleep(POLLING_INTERVAL)
         await service.handle_requests()
 
 
@@ -90,15 +117,26 @@ class SandboxService:
     ```
     """
 
-    def __init__(self, name: str, sandbox: SandboxEnvironment) -> None:
+    def __init__(
+        self,
+        name: str,
+        sandbox: SandboxEnvironment,
+        user: str | None = None,
+        started: anyio.Event | None = None,
+    ) -> None:
         """Create a SandboxService.
 
         Args:
             name (str): Service name
             sandbox (SandboxEnvironment): Sandbox to publish service to.
+            user (str | None): User to login as. Defaults to the sandbox environment's
+              default user.
+            started: Event to set when service has been started
         """
         self._name = name
         self._sandbox = sandbox
+        self._user = user
+        self._started = started
         self._service_dir = PurePosixPath(SERVICES_DIR, self._name)
         self._methods: dict[str, SandboxServiceMethod] = {}
         self._requests_dir: str = ""
@@ -131,6 +169,10 @@ class SandboxService:
         await self._write_text_file(client_script, client_code)
         self._client_script = client_script
 
+        # set started event if provided
+        if self._started:
+            self._started.set()
+
     async def handle_requests(self) -> None:
         """Handle all pending service requests."""
         # list pending requests
@@ -141,9 +183,15 @@ class SandboxService:
         if result.success:
             request_files = result.stdout.strip().splitlines()
             if request_files:
-                await asyncio.gather(
-                    *[self._handle_request(file) for file in request_files]
-                )
+                async with anyio.create_task_group() as tg:
+                    for file in request_files:
+                        tg.start_soon(
+                            coro_log_exceptions,
+                            logger,
+                            "handling sandbox service request",
+                            self._handle_request,
+                            file,
+                        )
 
     async def _handle_request(self, request_file: str) -> None:
         # read request
@@ -243,7 +291,9 @@ class SandboxService:
 
     async def _exec(self, cmd: list[str], input: str | None = None) -> ExecResult[str]:
         try:
-            return await self._sandbox.exec(cmd, input=input, timeout=30)
+            return await self._sandbox.exec(
+                cmd, user=self._user, input=input, timeout=30
+            )
         except TimeoutError:
             raise RuntimeError(
                 f"Timed out executing command {' '.join(cmd)} in sandbox"

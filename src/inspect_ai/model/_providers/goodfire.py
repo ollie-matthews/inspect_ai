@@ -1,9 +1,20 @@
+# type: ignore
+
+# NOTE: We need to type: ignore above because Goodfire has pinned all
+# of its dependencies to exact versions, which means that when we
+# install it in CI it breaks other packages (e.g. mistralai, google-genai)
+# we have a PR to resolve this here: https://github.com/goodfire-ai/goodfire-sdk/pull/8
+
 import os
 from typing import Any, List, Literal, get_args
 
 from goodfire import AsyncClient
 from goodfire.api.chat.interfaces import ChatMessage as GoodfireChatMessage
-from goodfire.api.exceptions import InvalidRequestException, RateLimitException
+from goodfire.api.exceptions import (
+    InvalidRequestException,
+    RateLimitException,
+    ServerErrorException,
+)
 from goodfire.variants.variants import SUPPORTED_MODELS, Variant
 from typing_extensions import override
 
@@ -111,11 +122,6 @@ class GoodfireAPI(ModelAPI):
         # Initialize variant directly with model name
         self.variant = Variant(self.model_name)  # type: ignore
 
-    @override
-    async def close(self) -> None:
-        # httpx.AsyncClient is created on each generate()
-        pass
-
     def _to_goodfire_message(self, message: ChatMessage) -> GoodfireChatMessage:
         """Convert an Inspect message to a Goodfire message format.
 
@@ -163,9 +169,9 @@ class GoodfireAPI(ModelAPI):
         return ex
 
     @override
-    def is_rate_limit(self, ex: BaseException) -> bool:
+    def should_retry(self, ex: Exception) -> bool:
         """Check if exception is due to rate limiting."""
-        return isinstance(ex, RateLimitException)
+        return isinstance(ex, RateLimitException | ServerErrorException)
 
     @override
     def connection_key(self) -> str:
@@ -228,7 +234,8 @@ class GoodfireAPI(ModelAPI):
                 choices=[
                     ChatCompletionChoice(
                         message=ChatMessageAssistant(
-                            content=response_dict["choices"][0]["message"]["content"]
+                            content=response_dict["choices"][0]["message"]["content"],
+                            model=self.model_name,
                         ),
                         stop_reason="stop",
                     )

@@ -14,12 +14,15 @@ reference_docs = ["reference/inspect_ai.qmd"] + [
     for doc in [
         "solver.qmd",
         "tool.qmd",
+        "agent.qmd",
         "scorer.qmd",
         "model.qmd",
         "dataset.qmd",
         "approval.qmd",
         "log.qmd",
+        "analysis.qmd",
         "util.qmd",
+        "hooks.qmd"
     ]
 ]
 

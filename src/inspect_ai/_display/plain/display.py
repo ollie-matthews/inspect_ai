@@ -1,14 +1,16 @@
-import asyncio
 import contextlib
-from typing import Any, AsyncIterator, Coroutine, Iterator
+from typing import AsyncIterator, Callable, Coroutine, Iterator
 
+import anyio
 import rich
 
 from inspect_ai._display.core.rich import rich_initialise
+from inspect_ai._util._async import configured_async_backend, run_coroutine
+from inspect_ai._util.platform import running_in_notebook
 from inspect_ai._util.text import truncate
 from inspect_ai._util.throttle import throttle
 
-from ...util._concurrency import concurrency_status
+from ...util._concurrency import concurrency_status_display
 from ..core.config import task_config
 from ..core.display import (
     TR,
@@ -22,8 +24,8 @@ from ..core.display import (
     TaskSpec,
     TaskWithResult,
 )
-from ..core.footer import task_http_rate_limits
-from ..core.panel import task_panel, task_targets
+from ..core.footer import task_http_retries_str
+from ..core.panel import task_panel
 from ..core.results import task_metric, tasks_results
 
 
@@ -41,8 +43,11 @@ class PlainDisplay(Display):
     def progress(self, total: int) -> Iterator[Progress]:
         yield PlainProgress(total)
 
-    def run_task_app(self, main: Coroutine[Any, Any, TR]) -> TR:
-        return asyncio.run(main)
+    def run_task_app(self, main: Callable[[], Coroutine[None, None, TR]]) -> TR:
+        if running_in_notebook():
+            return run_coroutine(main())
+        else:
+            return anyio.run(main, backend=configured_async_backend())
 
     @contextlib.contextmanager
     def suspend_task_app(self) -> Iterator[None]:
@@ -74,7 +79,7 @@ class PlainDisplay(Display):
             profile=profile,
             show_model=True,
             body="",  # Empty body since we haven't started yet
-            subtitle=(task_config(profile), task_targets(profile)),
+            subtitle=task_config(profile),
             footer=None,
             log_location=None,
         )
@@ -88,6 +93,10 @@ class PlainDisplay(Display):
             show_task_names=self.multiple_task_names,
             show_model_names=self.multiple_model_names,
         )
+
+    def display_counter(self, caption: str, value: str) -> None:
+        # Not supported for plain display as counters are only shown for tasks.
+        pass
 
     def _print_results(self) -> None:
         """Print final results using rich panels"""
@@ -119,14 +128,14 @@ class PlainTaskDisplay(TaskDisplay):
         self.samples_complete = 0
         self.samples_total = 0
         self.current_metrics: list[TaskDisplayMetric] | None = None
-        self.last_progress = 0  # Track last progress percentage
+        self.last_progress = 0
 
     @contextlib.contextmanager
     def progress(self) -> Iterator[Progress]:
         self.progress_display = PlainProgress(self.task.profile.steps)
         yield self.progress_display
 
-    @throttle(1)
+    @throttle(5)
     def _print_status_throttled(self) -> None:
         self._print_status()
 
@@ -135,13 +144,8 @@ class PlainTaskDisplay(TaskDisplay):
         if not self.progress_display:
             return
 
-        # Calculate current progress percentage
-        current_progress = int(
-            self.progress_display.current / self.progress_display.total * 100
-        )
-
-        # Only print on percentage changes to avoid too much output
-        if current_progress != self.last_progress:
+        # Only print when step count changes to avoid too much output
+        if self.progress_display.current != self.last_progress:
             status_parts: list[str] = []
 
             # if this is parallel print task and model to distinguish (limit both to 12 chars)
@@ -154,8 +158,11 @@ class PlainTaskDisplay(TaskDisplay):
                 )
 
             # Add step progress
+            progress_percent = int(
+                self.progress_display.current / self.progress_display.total * 100
+            )
             status_parts.append(
-                f"Steps: {self.progress_display.current:3d}/{self.progress_display.total} {current_progress:3d}%"
+                f"Steps: {self.progress_display.current:3d}/{self.progress_display.total} {progress_percent:3d}%"
             )
 
             # Add sample progress
@@ -172,7 +179,7 @@ class PlainTaskDisplay(TaskDisplay):
             # Very similar to ``inspect_ai._display.core.footer.task_resources``, but without
             # the rich formatting added in the ``task_dict`` call
             resources_dict: dict[str, str] = {}
-            for model, resource in concurrency_status().items():
+            for model, resource in concurrency_status_display().items():
                 resources_dict[model] = f"{resource[0]:2d}/{resource[1]:2d}"
             resources = ", ".join(
                 [f"{key}: {value}" for key, value in resources_dict.items()]
@@ -180,14 +187,14 @@ class PlainTaskDisplay(TaskDisplay):
             status_parts.append(resources)
 
             # Add rate limits
-            rate_limits = task_http_rate_limits()
+            rate_limits = task_http_retries_str()
             if rate_limits:
                 status_parts.append(rate_limits)
 
             # Print on new line
             print(" | ".join(status_parts))
 
-            self.last_progress = current_progress
+            self.last_progress = self.progress_display.current
 
     def sample_complete(self, complete: int, total: int) -> None:
         self.samples_complete = complete
@@ -201,3 +208,4 @@ class PlainTaskDisplay(TaskDisplay):
     def complete(self, result: TaskResult) -> None:
         self.task.result = result
         self._print_status()
+        print("")

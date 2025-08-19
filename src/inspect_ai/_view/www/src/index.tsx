@@ -1,21 +1,28 @@
 import { createRoot } from "react-dom/client";
-import { App } from "./App";
-import api from "./api/index";
-import { ApplicationState, Capabilities } from "./types";
-import { throttle } from "./utils/sync";
+import { App } from "./app/App";
+import api from "./client/api/index";
+import { Capabilities } from "./client/api/types";
+import storage from "./client/storage";
+import { initializeStore, storeImplementation } from "./state/store";
 import { getVscodeApi } from "./utils/vscode";
 
-// Read any state from the page itself
+// Resolve the api
+const applicationApi = api;
+const applicationStorage = storage;
+
+// Application capabilities
 const vscode = getVscodeApi();
-let initialState = undefined;
 let capabilities: Capabilities = {
   downloadFiles: true,
   webWorkers: true,
+  streamSamples: !!applicationApi.get_log_pending_samples,
+  streamSampleData: !!applicationApi.get_log_sample_data,
+  nativeFind: !vscode,
 };
-if (vscode) {
-  initialState = filterState(vscode.getState() as ApplicationState);
 
-  // Determine the capabilities
+// Initial state / storage
+if (vscode) {
+  // Adjust capabilities
   const extensionVersionEl = document.querySelector(
     'meta[name="inspect-extension:version"]',
   );
@@ -24,10 +31,18 @@ if (vscode) {
     : undefined;
 
   if (!extensionVersion) {
-    capabilities = { downloadFiles: false, webWorkers: false };
+    capabilities.downloadFiles = false;
+    capabilities.webWorkers = false;
   }
 }
 
+// Inititialize the application store
+initializeStore(applicationApi, capabilities, applicationStorage);
+
+// Determine whether we need to restore a stored hash
+restoreHash();
+
+// Find the root element and render into it
 const containerId = "app";
 const container = document.getElementById(containerId);
 if (!container) {
@@ -37,91 +52,24 @@ if (!container) {
   );
 }
 
+// Render into the root
 const root = createRoot(container as HTMLElement);
-root.render(
-  <App
-    api={api}
-    applicationState={initialState}
-    saveApplicationState={throttle((state) => {
-      const vscode = getVscodeApi();
-      if (vscode) {
-        vscode.setState(filterState(state));
+root.render(<App api={applicationApi} />);
+
+function restoreHash() {
+  // Check if we need to restore a route
+  if (storeImplementation && storeImplementation.getState().app.urlHash) {
+    const storedHash = storeImplementation.getState().app.urlHash;
+    if (storedHash) {
+      // Directly set the window location hash if there is
+      // a stored hash that needs to be restored
+      if (storedHash.startsWith("/")) {
+        window.location.hash = storedHash;
+      } else if (storedHash.startsWith("#")) {
+        window.location.hash = storedHash;
+      } else {
+        window.location.hash = "#" + storedHash;
       }
-    }, 1000)}
-    capabilities={capabilities}
-    pollForLogs={false}
-  />,
-);
-
-function filterState(state: ApplicationState) {
-  if (!state) {
-    return state;
+    }
   }
-
-  // When saving state, we can't store vast amounts of data (like a large sample)
-  const filters = [filterLargeSample, filterLargeSelectedLog];
-  return filters.reduce(
-    (filteredState, filter) => filter(filteredState),
-    state,
-  );
-}
-
-// Filters the selected Sample if it is large
-function filterLargeSample(state: ApplicationState) {
-  if (!state || !state.selectedSample) {
-    return state;
-  }
-
-  const estimatedTotalSize = estimateSize(state.selectedSample.messages);
-  if (estimatedTotalSize > 400000) {
-    const { selectedSample, ...filteredState } = state; // eslint-disable-line
-    return filteredState;
-  } else {
-    return state;
-  }
-}
-
-// Filters the selectedlog if it is too large
-function filterLargeSelectedLog(state: ApplicationState) {
-  if (!state || !state.selectedLog?.contents) {
-    return state;
-  }
-
-  const estimatedSize = estimateSize(
-    state.selectedLog.contents.sampleSummaries,
-  );
-  if (estimatedSize > 400000) {
-    const { selectedLog, ...filteredState } = state; // eslint-disable-line
-    return filteredState;
-  } else {
-    return state;
-  }
-}
-
-function estimateSize(list: unknown[], frequency = 0.2) {
-  if (!list || list.length === 0) {
-    return 0;
-  }
-
-  // Total number of samples
-  const sampleSize = Math.ceil(list.length * frequency);
-
-  // Get a proper random sample without duplicates
-  const messageIndices = new Set<number>();
-  while (
-    messageIndices.size < sampleSize &&
-    messageIndices.size < list.length
-  ) {
-    const randomIndex = Math.floor(Math.random() * list.length);
-    messageIndices.add(randomIndex);
-  }
-
-  // Calculate size from sampled messages
-  const totalSize = Array.from(messageIndices).reduce((size, index) => {
-    return size + JSON.stringify(list[index]).length;
-  }, 0);
-
-  // Estimate total size based on sample
-  const estimatedTotalSize = (totalSize / sampleSize) * list.length;
-  return estimatedTotalSize;
 }

@@ -79,7 +79,7 @@ class Llama31Handler(ChatAPIHandler):
         prompt that asks the model to use the <tool_call>...</tool_call> syntax)
         """
         # extract tool calls
-        tool_call_regex = rf"<{TOOL_CALL}>((?:.|\n)*?)</{TOOL_CALL}>"
+        tool_call_regex = rf"<{TOOL_CALL}s?>((?:.|\n)*?)</{TOOL_CALL}s?>"
         tool_calls_content: list[str] = re.findall(tool_call_regex, response)
 
         # if there are tool calls proceed with parsing
@@ -93,7 +93,7 @@ class Llama31Handler(ChatAPIHandler):
             ]
 
             # find other content that exists outside tool calls
-            tool_call_content_regex = rf"<{TOOL_CALL}>(?:.|\n)*?</{TOOL_CALL}>"
+            tool_call_content_regex = rf"<{TOOL_CALL}s?>(?:.|\n)*?</{TOOL_CALL}s?>"
             other_content = re.split(tool_call_content_regex, response, flags=re.DOTALL)
             other_content = [
                 str(content).strip()
@@ -106,13 +106,16 @@ class Llama31Handler(ChatAPIHandler):
             return ChatMessageAssistant(
                 content=filter_assistant_header(content),
                 tool_calls=tool_calls,
+                model=self.model,
                 source="generate",
             )
 
         # otherwise this is just an ordinary assistant message
         else:
             return ChatMessageAssistant(
-                content=filter_assistant_header(response), source="generate"
+                content=filter_assistant_header(response),
+                model=self.model,
+                source="generate",
             )
 
     @override
@@ -161,7 +164,7 @@ def parse_tool_call_content(content: str, tools: list[ToolInfo]) -> ToolCall:
         # see if we can get the fields (if not report error)
         name = tool_call_data.get("name", None)
         arguments = tool_call_data.get("arguments", None)
-        if not name or not arguments:
+        if not name or (arguments is None):
             raise ValueError(
                 "Required 'name' and 'arguments' not provided in JSON dictionary."
             )
@@ -184,7 +187,6 @@ def parse_tool_call_content(content: str, tools: list[ToolInfo]) -> ToolCall:
             id="unknown",
             function="unknown",
             arguments={},
-            type="function",
             parse_error=parse_error,
         )
 

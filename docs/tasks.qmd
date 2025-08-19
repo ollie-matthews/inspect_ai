@@ -7,13 +7,10 @@ title: Tasks
 This article documents both basic and advanced use of Inspect tasks, which are the fundamental unit of integration for datasets, solvers, and scorers. The following topics are explored:
 
 -   [Task Basics](#task-basics) describes the core components and options of tasks.
-
 -   [Parameters](#parameters) covers adding parameters to tasks to make them flexible and adaptable.
-
 -   [Solvers](#solvers) describes how to create tasks that can be used with many different solvers.
-
 -   [Task Reuse](#task-reuse) documents how to flexibly derive new tasks from existing task definitions.
-
+-   [Packaging](#packaging) illustreates how you can distribute tasks within Python packages.
 -   [Exploratory](#exploratory) provides guidance on doing exploratory task and solver development.
 
 ## Task Basics {#task-basics}
@@ -22,7 +19,7 @@ Tasks provide a recipe for an evaluation consisting minimally of a dataset, a so
 
 ``` python
 from inspect_ai import Task, task
-from inspect_ai.dataset import json_datasets
+from inspect_ai.dataset import json_dataset
 from inspect_ai.scorer import model_graded_fact
 from inspect_ai.solver import chain_of_thought, generate
 
@@ -41,31 +38,36 @@ For convenience, tasks always define a default solver. That said, it is often de
 
 While many tasks can be defined with only a dataset, solver, and scorer, there are lots of other useful `Task` options. We won't describe these options in depth here, but rather provide a list along with links to other sections of the documentation that cover their usage:
 
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
-| Option           | Description                                          | Docs                                                      |
-+==================+======================================================+===========================================================+
-| `epochs`         | Epochs to run for each dataset sample.               | [Epochs](scorers.qmd#reducing-epochs)                     |
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
-| `config`         | Config for model generation.                         | [Generate Config](options.qmd#model-generation)           |
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
-| `setup`          | Setup solver(s) to run prior to the main solver.     | [Sample Setup](#setup-parameter)                          |
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
-| `sandbox`        | Sandbox configuration for un-trusted code execution. | [Sandboxing](sandboxing.qmd)                              |
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
-| `approval`       | Approval policy for tool calls.                      | [Tool Approval](approval.qmd)                             |
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
-| `metrics`        | Metrics to use in place of scorer metrics.           | [Scoring Metrics](scorers.qmd#scoring-metrics)            |
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
-| `fail_on_error`  | Failure tolerance for samples.                       | [Sample Failure](errors-and-limits.qmd#failure-threshold) |
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
-| `message_limit`\ | Limits to apply to sample execution.                 | [Sample Limits](errors-and-limits.qmd#sample-limits)      |
-| `token_limit`\   |                                                      |                                                           |
-| `time_limit`     |                                                      |                                                           |
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
-| `name`\          | Eval log attributes for task.                        | [Eval Logs](eval-logs.qmd)                                |
-| `version`\       |                                                      |                                                           |
-| `metadata`       |                                                      |                                                           |
-+------------------+------------------------------------------------------+-----------------------------------------------------------+
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| Option           | Description                                                                                     | Docs                                                      |
++==================+=================================================================================================+===========================================================+
+| `epochs`         | Epochs to run for each dataset sample.                                                          | [Epochs](scorers.qmd#reducing-epochs)                     |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `setup`          | Setup solver(s) to run prior to the main solver.                                                | [Sample Setup](#setup-parameter)                          |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `cleanup`        | Cleanup function to call at task completion                                                     | [Task Cleanup](#task-cleanup)                             |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `sandbox`        | Sandbox configuration for un-trusted code execution.                                            | [Sandboxing](sandboxing.qmd)                              |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `approval`       | Approval policy for tool calls.                                                                 | [Tool Approval](approval.qmd)                             |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `metrics`        | Metrics to use in place of scorer metrics.                                                      | [Scoring Metrics](scorers.qmd#scoring-metrics)            |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `model`          | Model for evaluation (note that model is typically specified by `eval` rather than in the task) | [Models](models.qmd)                                      |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `config`         | Config for model generation (also typically specified in `eval`).                               | [Generate Config](options.qmd#model-generation)           |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `fail_on_error`  | Failure tolerance for samples.                                                                  | [Sample Failure](errors-and-limits.qmd#failure-threshold) |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `message_limit`\ | Limits to apply to sample execution.                                                            | [Sample Limits](errors-and-limits.qmd#sample-limits)      |
+| `token_limit`\   |                                                                                                 |                                                           |
+| `time_limit`\    |                                                                                                 |                                                           |
+| `working_limit`  |                                                                                                 |                                                           |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
+| `name`\          | Eval log attributes for task.                                                                   | [Eval Logs](eval-logs.qmd)                                |
+| `version`\       |                                                                                                 |                                                           |
+| `metadata`       |                                                                                                 |                                                           |
++------------------+-------------------------------------------------------------------------------------------------+-----------------------------------------------------------+
 
 : {tbl-colwidths=\[25,50,25\]}
 
@@ -109,7 +111,7 @@ inspect eval security.py \
    -T system="researcher.txt" -T grader="hacker.txt"
 ```
 
-If you have several task paramaters you want to specify together, you can put them in a YAML or JSON file and use the `--task-config` CLI option. For example:
+If you have several task parameters you want to specify together, you can put them in a YAML or JSON file and use the `--task-config` CLI option. For example:
 
 ``` {.yaml filename="config.yaml"}
 system: "researcher.txt"
@@ -128,7 +130,9 @@ While tasks always include a *default* solver, you can also vary the solver to e
 
 ### Solver Parameter
 
-If you want to make your task work with a variety of solvers, the first thing to do is add a `solver` parameter to your task function. For example, let's start with a CTF challenge task where the `solver` is hard-coded:
+You can substitute an alternate solver for the solver that is built in to your `Task` using the `--solver` command line parameter (or `solver` argument to the `eval()` function). 
+
+For example, let's start with a simple CTF challenge task:
 
 ``` python
 from inspect_ai import Task, task
@@ -152,17 +156,20 @@ def ctf():
     )
 ```
 
-This task uses the most naive solver possible (a simple tool use loop with no additional elicitation). That might be okay for initial task development, but we'll likely want to try lots of different strategies. We start by breaking the `solver` into its own function and adding an alternative solver that uses the `basic_agent()`
+This task uses the most naive solver possible (a simple tool use loop with no additional elicitation). That might be okay for initial task development, but we'll likely want to try lots of different strategies. We start by breaking the `solver` into its own function and adding an alternative solver that uses a `react()` agent
 
 ``` python
 from inspect_ai import Task, task
-from inspect_ai.solver import basic_agent, chain, generate, use_tools
-from inspect_ai.tool import bash, python
+from inspect_ai.agent import react
+from inspect_ai.dataset._dataset import Sample
 from inspect_ai.scorer import includes
+from inspect_ai.solver import chain, generate, solver, use_tools
+from inspect_ai.tool import bash, python
+
 
 @solver
 def ctf_tool_loop():
-    reutrn chain([
+    return chain([
         use_tools([
             bash(timeout=180), 
             python(timeout=180)
@@ -171,28 +178,23 @@ def ctf_tool_loop():
     ])
 
 @solver
-def ctf_agent(max_attempts: int = 3):
-    return basic_agent(
-        tools=[
-            bash(timeout=180), 
-            python(timeout=180)
-        ],
-        max_attempts=max_attempts,
-    ) 
+def ctf_agent(attempts: int = 3):
+    return react(
+        tools=[bash(timeout=180), python(timeout=180)],
+        attempts=attempts,
+    )
+
  
 @task
-def ctf(solver: Solver | None = None):
-    # use default tool loop solver if no solver specified
-    if solver is None:
-        solver = ctf_tool_loop()
-   
+def ctf():
     # return task
     return Task(
         dataset=read_dataset(),
-        solver=solver,
+        solver=ctf_tool_loop(),
         sandbox="docker",
-        scorer=includes()
+        scorer=includes(),
     )
+
 ```
 
 Note that we use the `chain()` function to combine multiple solvers into a composite one.
@@ -206,13 +208,13 @@ inspect eval ctf.py
 # run with the ctf agent solver
 inspect eval ctf.py --solver=ctf_agent
 
-# run with a different max_attempts
-inspect eval ctf.py --solver=ctf_agent -S max_attempts=5
+# run with a different attempts
+inspect eval ctf.py --solver=ctf_agent -S attempts=5
 ```
 
-Note the use of the `-S` CLI option to pass an alternate value for `max_attempts` to the `ctf_agent()` solver.
+Note the use of the `-S` CLI option to pass an alternate value for `attempts` to the `ctf_agent()` solver.
 
-### Setup Parameter
+### Setup Parameter {#setup-parameter}
 
 In some cases, there will be important steps in the setup of a task that *should not be substituted* when another solver is used with the task. For example, you might have a step that does dynamic prompt engineering based on values in the sample `metadata` or you might have a step that initialises resources in a sample's sandbox.
 
@@ -225,6 +227,8 @@ def ctf_prompt():
     async def solve(state, generate):
         # TODO: dynamic prompt engineering
         return state
+
+    return solve
 
 @task
 def ctf(solver: Solver | None = None):
@@ -242,17 +246,37 @@ def ctf(solver: Solver | None = None):
     )
 ```
 
+## Task Cleanup {#task-cleanup}
+
+You can use the `cleanup` parameter for executing code at the end of each sample run. The `cleanup` function is passed the `TaskState` and is called for both successful runs and runs where are exception is thrown. Extending the example from above:
+
+``` python
+async def ctf_cleanup(state: TaskState):
+    ## perform cleanup
+    ...
+
+Task(
+    dataset=read_dataset(),
+    setup=ctf_prompt(),
+    solver=solver,
+    cleanup=ctf_cleanup,
+    scorer=includes()
+)
+```
+
+Note that like solvers, cleanup functions should be `async`.
+
 ## Task Reuse {#task-reuse}
 
 The basic mechanism for task re-use is to create flexible and adaptable base `@task` functions (which often have many parameters) and then derive new higher-level tasks from them by creating additional `@task` functions that call the base function.
 
-In some cases though you might not have full control over the base `@task` function (e.g. it's published in a Python package you aren't the maintainer of) but you nevertheless want to flexibly create derivative tasks from it. To do this, you can use the `task_with()` function, which clones an existing task and enables you to override any of the task fields that you need to.
+In some cases though you might not have full control over the base `@task` function (e.g. it's published in a Python package you aren't the maintainer of) but you nevertheless want to flexibly create derivative tasks from it. To do this, you can use the `task_with()` function, which provides a straightforward way to modify the properties of an existing task.
 
-For example, imagine you are dealing with a `Task` that hard-codes its `sandbox` to a particular Dockerfile included with the task, and further does not make a `solver` parameter available to swap in other solvers:
+For example, imagine you are dealing with a `Task` that hard-codes its `sandbox` to a particular Dockerfile included with the task, and further hard codes its `solver` to a simple agent:
 
 ``` python
 from inspect_ai import Task, task
-from inspect_ai.solver import basic_agent
+from inspect_ai.agent import react
 from inspect_ai.tool import bash
 from inspect_ai.scorer import includes
 
@@ -260,7 +284,7 @@ from inspect_ai.scorer import includes
 def hard_coded():
     return Task(
         dataset=read_dataset(),
-        solver=basic_agent(tools=[bash()]),
+        solver=react(tools=[bash()]),
         sandbox=("docker", "compose.yaml"),
         scorer=includes()
     )
@@ -290,6 +314,67 @@ def adapted(message_limit: int = 20):
 ```
 
 Tasks are recipes for an evaluation and represent the convergence of many considerations (datasets, solvers, sandbox environments, limits, and scoring). Task variations often lie at the intersection of these, and the `task_with()` function is intended to help you produce exactly the variation you need for a given evaluation.
+
+Note that `task_with()` modifies the passed task in-place, so if you want to create multiple variations of a single task using `task_with()` you should create the underlying task multiple times (once for each call to `task_with()`). For example:
+
+```python
+adapted1 = task_with(hard_coded(), ...)
+adapted2 = task_with(hard_coded(), ...)
+```
+
+## Packaging {#packaging}
+
+A convenient way to distribute tasks is to include them in a Python package. This makes it very easy for others to run your task and ensure they have all of the required dependencies.
+
+Tasks in packages can be _registered_ such that users can easily refer to them by name from the CLI. For example, the [Inspect Evals](https://github.com/UKGovernmentBEIS/inspect_ai) package includes a suite of tasks that can be run as follows:
+
+```bash
+inspect eval inspect_evals/gaia 
+inspect eval inspect_evals/swe_bench
+```
+
+### Example
+
+Here's an example that walks through all of the requirements for registering tasks in packages. Let's say your package is named `evals` and has a task named `mytask` in the `tasks.py` file:
+
+```  
+evals/       
+  evals/
+    tasks.py
+    _registry.py
+  pyproject.toml
+```
+
+The `_registry.py` file serves as a place to import things that you want registered with Inspect. For example:
+
+``` {.python filename="_registry.py"}
+from .tasks import mytask
+```
+
+You can then register `mytask` (and anything else imported into `_registry.py`) as a [setuptools entry point](https://setuptools.pypa.io/en/latest/userguide/entry_point.html). This will ensure that inspect can resolve references to your package from the CLI. Here is how this looks in `pyproject.toml`:
+
+::: {.panel-tabset group="entry-points"}
+## Setuptools
+
+``` toml
+[project.entry-points.inspect_ai]
+evals = "evals._registry"
+```
+
+## Poetry
+
+``` toml
+[tool.poetry.plugins.inspect_ai]
+evals = "evals._registry"
+```
+:::
+
+Now, anyone that has installed your package can run the task as follows:
+
+```bash
+inspect eval evals/mytask
+```
+
 
 ## Exploratory {#exploratory}
 

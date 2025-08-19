@@ -8,7 +8,7 @@ from .._tool_call import ToolCall, ToolCallContent, ToolCallView, ToolCallViewer
 def code_viewer(language: str, code_param: str) -> ToolCallViewer:
     def viewer(tool_call: ToolCall) -> ToolCallView:
         code = tool_call.arguments.get(code_param, None)
-        code = (code or tool_call.function).strip()
+        code = str(code or tool_call.function).strip()
         call = ToolCallContent(
             title=language,
             format="markdown",
@@ -30,7 +30,7 @@ def bash(
     Args:
       timeout: Timeout (in seconds) for command.
       user: User to execute commands as.
-      sandbox: Optional sandbox environmnent name.
+      sandbox: Optional sandbox environment name.
 
     Returns:
       String with command output (stdout) or command error (stderr).
@@ -70,7 +70,7 @@ def python(
     Args:
       timeout: Timeout (in seconds) for command.
       user: User to execute commands as.
-      sandbox: Optional sandbox environmnent name.
+      sandbox: Optional sandbox environment name.
 
     Returns:
       String with command output (stdout) or command error (stderr).
@@ -96,7 +96,10 @@ def python(
           The output of the Python code.
         """
         result = await sandbox_env(sandbox).exec(
-            cmd=["python3"], input=code, timeout=timeout, user=user
+            cmd=["bash", "--login", "-c", "python3 -"],
+            input=code,
+            timeout=timeout,
+            user=user,
         )
         # return output (including stderr if any)
         output = ""

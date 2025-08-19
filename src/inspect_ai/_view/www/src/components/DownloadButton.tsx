@@ -1,4 +1,5 @@
-import api from "../api/index";
+import { FC } from "react";
+import api from "../client/api/index";
 import "./DownloadButton.css";
 
 interface DownloadButtonProps {
@@ -7,7 +8,7 @@ interface DownloadButtonProps {
   fileContents: string | Blob | ArrayBuffer | ArrayBufferView;
 }
 
-export const DownloadButton: React.FC<DownloadButtonProps> = ({
+export const DownloadButton: FC<DownloadButtonProps> = ({
   label,
   fileName,
   fileContents,

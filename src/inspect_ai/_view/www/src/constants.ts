@@ -1,15 +1,39 @@
+// Model constants
+export const kModelNone = "none/none";
+
 // Workspace tab constants
-export const kEvalWorkspaceTabId = "eval-tab";
-export const kJsonWorkspaceTabId = "json-tab";
-export const kInfoWorkspaceTabId = "plan-tab";
+export const kLogViewSamplesTabId = "samples";
+export const kLogViewJsonTabId = "json";
+export const kLogViewInfoTabId = "info";
+export const kLogViewModelsTabId = "models";
+export const kLogViewTaskTabId = "task";
+
+export const kWorkspaceTabs = [
+  kLogViewSamplesTabId,
+  kLogViewJsonTabId,
+  kLogViewInfoTabId,
+  kLogViewModelsTabId,
+  kLogViewTaskTabId,
+];
 
 // Sample tab constants
-export const kSampleMessagesTabId = `sample-display-messages`;
-export const kSampleTranscriptTabId = `sample-display-transcript`;
-export const kSampleScoringTabId = `sample-display-scoring`;
-export const kSampleMetdataTabId = `sample-display-metadata`;
-export const kSampleErrorTabId = `sample-display-error`;
-export const kSampleJsonTabId = `sample-display-json`;
+export const kSampleMessagesTabId = `messages`;
+export const kSampleTranscriptTabId = `transcript`;
+export const kSampleScoringTabId = `scoring`;
+export const kSampleMetdataTabId = `metadata`;
+export const kSampleErrorTabId = `error`;
+export const kSampleErrorRetriesTabId = `retry-errors`;
+export const kSampleJsonTabId = `json`;
+
+export const kSampleTabIds = [
+  kSampleMessagesTabId,
+  kSampleTranscriptTabId,
+  kSampleScoringTabId,
+  kSampleMetdataTabId,
+  kSampleErrorTabId,
+  kSampleErrorRetriesTabId,
+  kSampleJsonTabId,
+];
 
 // Scoring constants
 export const kScoreTypePassFail = "passfail";
@@ -18,6 +42,7 @@ export const kScoreTypeNumeric = "numeric";
 export const kScoreTypeOther = "other";
 export const kScoreTypeObject = "object";
 export const kScoreTypeBoolean = "boolean";
+export const kScoreTypeList = "list";
 
 // Sorting constants
 export const kSampleAscVal = "sample-asc";

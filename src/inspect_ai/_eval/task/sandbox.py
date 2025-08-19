@@ -1,9 +1,10 @@
-import asyncio
 import base64
 import contextlib
+import os
 from random import random
 from typing import AsyncGenerator, Callable, NamedTuple, cast
 
+import anyio
 import httpx
 from tenacity import (
     retry,
@@ -15,10 +16,10 @@ from tenacity import (
 
 from inspect_ai._eval.task.task import Task
 from inspect_ai._eval.task.util import task_run_dir
-from inspect_ai._util.constants import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT
-from inspect_ai._util.file import file, filesystem
+from inspect_ai._util.file import FileSystem, file, filesystem
+from inspect_ai._util.httpx import httpx_should_retry, log_httpx_retry_attempt
+from inspect_ai._util.path import chdir
 from inspect_ai._util.registry import registry_unqualified_name
-from inspect_ai._util.retry import httpx_should_retry, log_retry_attempt
 from inspect_ai._util.url import data_uri_to_base64, is_data_uri, is_http_url
 from inspect_ai.dataset import Sample
 from inspect_ai.util._concurrency import concurrency
@@ -30,6 +31,7 @@ from inspect_ai.util._sandbox.environment import (
     SandboxEnvironment,
     SandboxEnvironmentConfigType,
     SandboxEnvironmentSpec,
+    TaskInitEnvironment,
 )
 from inspect_ai.util._sandbox.registry import registry_find_sandboxenv
 
@@ -43,7 +45,7 @@ async def sandboxenv_context(
     sample: Sample,
 ) -> AsyncGenerator[None, None]:
     # resolve sandbox
-    sandbox = resolve_sandbox(sandbox, sample)
+    sandbox = await resolve_sandbox(sandbox, sample)
     if not sandbox:
         raise ValueError("sandboxenv_context called with no sandbox specified")
 
@@ -62,7 +64,7 @@ async def sandboxenv_context(
     # in and grab all of the sandboxes). Therefore, in this case we wait a random
     # delay so that all tasks/samples have an equal shot at getting scheduled.
     if max_sandboxes is not None:
-        await asyncio.sleep(random())
+        await anyio.sleep(random())
 
     # enforce concurrency if required
     sandboxes_cm = (
@@ -75,7 +77,8 @@ async def sandboxenv_context(
         # read files from sample
         files: dict[str, bytes] = {}
         if sample.files:
-            for path, contents in sample.files.items():
+            resolved_files = resolve_sample_files(sample.files)
+            for path, contents in resolved_files.items():
                 files[path] = await read_sandboxenv_file(contents)
 
         # read setup script from sample (add bash shebang if necessary)
@@ -103,7 +106,7 @@ async def sandboxenv_context(
             # run sample
             yield
 
-        except asyncio.CancelledError as ex:
+        except anyio.get_cancelled_exc_class() as ex:
             interrupted = True
             raise ex
 
@@ -117,6 +120,28 @@ async def sandboxenv_context(
                     environments=environments,
                     interrupted=interrupted,
                 )
+
+
+def resolve_sample_files(files: dict[str, str]) -> dict[str, str]:
+    # if the source path is a directory then add its files recursively
+    resolved_files: dict[str, str] = dict()
+    for key, contents in files.items():
+        fs = filesystem_for_file(contents)
+        if (
+            fs is not None
+            and fs.exists(contents)
+            and fs.info(contents).type == "directory"
+        ):
+            root_uri = fs.path_as_uri(contents)
+            for file in fs.ls(contents, recursive=True):
+                if file.type == "file":
+                    file_uri = fs.path_as_uri(file.name)
+                    file_relative = file_uri.removeprefix(root_uri)[1:]
+                    resolved_files[os.path.join(key, file_relative)] = file.name
+        else:
+            resolved_files[key] = contents
+
+    return resolved_files
 
 
 async def read_sandboxenv_file(contents: str) -> bytes:
@@ -141,25 +166,49 @@ async def read_sandboxenv_file(contents: str) -> bytes:
     return file_bytes
 
 
+def filesystem_for_file(contents: str) -> FileSystem | None:
+    if is_data_uri(contents):
+        return None
+    elif is_http_url(contents):
+        return None
+    else:
+        try:
+            return filesystem(contents)
+        except Exception:
+            return None
+
+
 class TaskSandboxEnvironment(NamedTuple):
     sandbox: SandboxEnvironmentSpec
     run_dir: str
+    env: tuple[tuple[str, str], ...]
 
 
-def resolve_sandbox_for_task(
+async def resolve_sandbox_for_task_and_sample(
     eval_sandbox: SandboxEnvironmentSpec | None,
     task: Task,
     sample: Sample,
 ) -> TaskSandboxEnvironment | None:
     # eval_sandbox overrides task or sample sandbox
-    sandbox = eval_sandbox or resolve_sandbox(task.sandbox, sample)
+    sandbox = eval_sandbox or await resolve_sandbox(task.sandbox, sample)
     if sandbox is not None:
-        return TaskSandboxEnvironment(sandbox, task_run_dir(task))
+        # see if there are environment variables required for init of this sample
+        run_dir = task_run_dir(task)
+        with chdir(run_dir):
+            sandboxenv_type = registry_find_sandboxenv(sandbox.type)
+            task_init_environment = cast(
+                TaskInitEnvironment, getattr(sandboxenv_type, "task_init_environment")
+            )
+            env = await task_init_environment(sandbox.config, sample.metadata or {})
+
+        return TaskSandboxEnvironment(
+            sandbox=sandbox, run_dir=run_dir, env=tuple(sorted(env.items()))
+        )
     else:
         return None
 
 
-def resolve_sandbox(
+async def resolve_sandbox(
     sandbox: SandboxEnvironmentSpec | None,
     sample: Sample,
 ) -> SandboxEnvironmentSpec | None:
@@ -186,14 +235,14 @@ async def _retrying_httpx_get(
     url: str,
     client: httpx.AsyncClient = httpx.AsyncClient(),
     timeout: int = 30,  # per-attempt timeout
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    total_timeout: int = DEFAULT_TIMEOUT,  #  timeout for the whole retry loop. not for an individual attempt
+    max_retries: int = 10,
+    total_timeout: int = 120,  #  timeout for the whole retry loop. not for an individual attempt
 ) -> bytes:
     @retry(
         wait=wait_exponential_jitter(),
         stop=(stop_after_attempt(max_retries) | stop_after_delay(total_timeout)),
         retry=retry_if_exception(httpx_should_retry),
-        before_sleep=log_retry_attempt(url),
+        before_sleep=log_httpx_retry_attempt(url),
     )
     async def do_get() -> bytes:
         response = await client.get(

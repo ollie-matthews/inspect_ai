@@ -9,7 +9,7 @@ from textual.containers import ScrollableContainer
 from textual.widget import Widget
 from textual.widgets import Static
 
-from inspect_ai._util.content import ContentText
+from inspect_ai._util.content import ContentReasoning, ContentText
 from inspect_ai._util.rich import lines_display
 from inspect_ai._util.transcript import (
     set_transcript_markdown_options,
@@ -30,13 +30,12 @@ from inspect_ai.log._transcript import (
     SampleInitEvent,
     SampleLimitEvent,
     ScoreEvent,
-    StepEvent,
+    SpanBeginEvent,
     SubtaskEvent,
     ToolEvent,
 )
 from inspect_ai.model._chat_message import (
     ChatMessage,
-    ChatMessageAssistant,
     ChatMessageUser,
 )
 from inspect_ai.model._render import messages_preceding_assistant
@@ -85,6 +84,7 @@ class TranscriptView(ScrollableContainer):
                 scroll_to_end = (
                     new_sample or abs(self.scroll_y - self.max_scroll_y) <= 20
                 )
+
                 async with self.batch():
                     await self.remove_children()
                     await self.mount_all(
@@ -101,9 +101,32 @@ class TranscriptView(ScrollableContainer):
         else:
             self._pending_sample = sample
 
-    def _widgets_for_events(self, events: Sequence[Event]) -> list[Widget]:
+    def _widgets_for_events(
+        self, events: Sequence[Event], limit: int = 10
+    ) -> list[Widget]:
         widgets: list[Widget] = []
+
+        # filter the events to the <limit> most recent
+        filtered_events = events
+        if len(events) > limit:
+            filtered_events = filtered_events[-limit:]
+
+        # find the sample init event
+        sample_init: SampleInitEvent | None = None
         for event in events:
+            if isinstance(event, SampleInitEvent):
+                sample_init = event
+                break
+
+        # add the sample init event if it isn't already in the event list
+        if sample_init and sample_init not in filtered_events:
+            filtered_events = [sample_init] + list(filtered_events)
+
+        # compute how many events we filtered out
+        filtered_count = len(events) - len(filtered_events)
+        showed_filtered_count = False
+
+        for event in filtered_events:
             display = render_event(event)
             if display:
                 for d in display:
@@ -119,6 +142,22 @@ class TranscriptView(ScrollableContainer):
                             set_transcript_markdown_options(d.content)
                         widgets.append(Static(d.content, markup=False))
                         widgets.append(Static(Text(" ")))
+
+                        if not showed_filtered_count and filtered_count > 0:
+                            showed_filtered_count = True
+
+                            widgets.append(
+                                Static(
+                                    transcript_separator(
+                                        f"{filtered_count} events..."
+                                        if filtered_count > 1
+                                        else "1 event...",
+                                        self.app.current_theme.primary,
+                                    )
+                                )
+                            )
+                            widgets.append(Static(Text(" ")))
+
         return widgets
 
 
@@ -193,13 +232,22 @@ def render_model_event(event: ModelEvent) -> EventDisplay:
     return EventDisplay(f"model: {event.model}", Group(*content))
 
 
-def render_tool_event(event: ToolEvent) -> list[EventDisplay]:
-    # render sub-events
-    display: list[EventDisplay] = []
-    if event.events:
-        for e in event.events:
-            display.extend(render_event(e) or [])
+def render_sub_events(events: list[Event]) -> list[RenderableType]:
+    content: list[RenderableType] = []
+    for e in events:
+        event_displays = render_event(e) or []
+        for d in event_displays:
+            if d.content:
+                content.append(Text("  "))
+                content.append(transcript_separator(d.title, "black", "··"))
+                if isinstance(d.content, Markdown):
+                    set_transcript_markdown_options(d.content)
+                content.append(d.content)
 
+    return content
+
+
+def render_tool_event(event: ToolEvent) -> list[EventDisplay]:
     # render the call
     content = transcript_tool_call(event)
 
@@ -220,24 +268,7 @@ def render_tool_event(event: ToolEvent) -> list[EventDisplay]:
         result = str(result).strip()
         content.extend(lines_display(result, 50))
 
-    return display + [EventDisplay("tool call", Group(*content))]
-
-
-def render_step_event(event: StepEvent) -> EventDisplay:
-    if event.type == "solver":
-        return render_solver_event(event)
-    if event.type == "scorer":
-        return render_scorer_event(event)
-    else:
-        return EventDisplay(step_title(event))
-
-
-def render_solver_event(event: StepEvent) -> EventDisplay:
-    return EventDisplay(step_title(event))
-
-
-def render_scorer_event(event: StepEvent) -> EventDisplay:
-    return EventDisplay(step_title(event))
+    return [EventDisplay("tool call", Group(*content))]
 
 
 def render_score_event(event: ScoreEvent) -> EventDisplay:
@@ -257,13 +288,9 @@ def render_score_event(event: ScoreEvent) -> EventDisplay:
 
 
 def render_subtask_event(event: SubtaskEvent) -> list[EventDisplay]:
-    # render sub-events
-    display: list[EventDisplay] = []
-    if event.events:
-        for e in event.events:
-            display.extend(render_event(e) or [])
-
+    # render header
     content: list[RenderableType] = [transcript_function(event.name, event.input)]
+
     if event.result:
         content.append(Text())
         if isinstance(event.result, str | int | float | bool | None):
@@ -271,7 +298,7 @@ def render_subtask_event(event: SubtaskEvent) -> list[EventDisplay]:
         else:
             content.append(render_as_json(event.result))
 
-    return display + [EventDisplay(f"subtask: {event.name}", Group(*content))]
+    return [EventDisplay(f"subtask: {event.name}", Group(*content))]
 
 
 def render_input_event(event: InputEvent) -> EventDisplay:
@@ -320,16 +347,21 @@ def render_message(message: ChatMessage) -> list[RenderableType]:
         Text(),
     ]
 
-    if isinstance(message, ChatMessageAssistant) and message.reasoning:
-        content.extend(transcript_reasoning(message.reasoning))
-
-    if message.text:
+    # deal with plain text or with content blocks
+    if isinstance(message.content, str):
         content.extend([transcript_markdown(message.text.strip(), escape=True)])
+    else:
+        for c in message.content:
+            if isinstance(c, ContentReasoning):
+                content.extend(transcript_reasoning(c))
+            elif isinstance(c, ContentText):
+                content.extend([transcript_markdown(c.text.strip(), escape=True)])
+
     return content
 
 
-def step_title(event: StepEvent) -> str:
-    return f"{event.type or 'step'}: {event.name}"
+def span_title(event: SpanBeginEvent) -> str:
+    return f"{event.type or 'span'}: {event.name}"
 
 
 EventRenderer = Callable[[Any], EventDisplay | list[EventDisplay] | None]
@@ -337,7 +369,6 @@ EventRenderer = Callable[[Any], EventDisplay | list[EventDisplay] | None]
 _renderers: list[tuple[Type[Event], EventRenderer]] = [
     (SampleInitEvent, render_sample_init_event),
     (SampleLimitEvent, render_sample_limit_event),
-    (StepEvent, render_step_event),
     (ModelEvent, render_model_event),
     (ToolEvent, render_tool_event),
     (SubtaskEvent, render_subtask_event),

@@ -2,10 +2,11 @@ import base64
 import errno
 import json
 import os
+import shlex
 import tempfile
 from logging import getLogger
 from pathlib import Path, PurePosixPath
-from typing import Literal, Union, cast, overload
+from typing import Literal, NamedTuple, Union, overload
 
 from typing_extensions import override
 
@@ -30,6 +31,7 @@ from .cleanup import (
     project_cleanup,
     project_cleanup_shutdown,
     project_cleanup_startup,
+    project_record_auto_compose,
     project_startup,
 )
 from .compose import (
@@ -78,6 +80,9 @@ class DockerSandboxEnvironment(SandboxEnvironment):
                 name=task_project_name(task_name), config=config
             )
 
+            # record auto compose
+            project_record_auto_compose(project)
+
             # build containers which are out of date
             await compose_build(project)
 
@@ -119,6 +124,37 @@ class DockerSandboxEnvironment(SandboxEnvironment):
 
     @override
     @classmethod
+    async def task_init_environment(
+        cls, config: SandboxEnvironmentConfigType | None, metadata: dict[str, str]
+    ) -> dict[str, str]:
+        # get interpolated environment variables and underlying config path and text
+        resolved = resolve_config_environment(config, metadata)
+
+        # don't even consider sample-specific environment if there are no sample metadata refs
+        if resolved and len(resolved.env) > 0:
+            # resolve images using our env vars
+            result = await subprocess(
+                ["docker", "compose", "-f", resolved.config_file, "config", "--images"],
+                env=resolved.env,
+            )
+            if result.success:
+                # look through the images, if one of them doesn't apper in the the
+                # config text then this compose file requires its own sample specific
+                # environment for resolution
+                images = result.stdout.strip().splitlines()
+                for image in images:
+                    if image not in resolved.config_text:
+                        return resolved.env
+            else:
+                logger.warning(
+                    f"Unexpected error reading compose file '{resolved.config_file}': {result.stderr}"
+                )
+
+        # no per-sample environment required
+        return {}
+
+    @override
+    @classmethod
     async def sample_init(
         cls,
         task_name: str,
@@ -126,37 +162,40 @@ class DockerSandboxEnvironment(SandboxEnvironment):
         metadata: dict[str, str],
     ) -> dict[str, SandboxEnvironment]:
         # create environment variables for sample metadata
-        env: dict[str, str] = {}
-        if isinstance(config, str) and Path(config).exists():
-            # read the config file
-            with open(config, "r") as f:
-                config_text = f.read()
-
-            # only add metadata files if the key is in the file
-            for key, value in metadata.items():
-                key = f"SAMPLE_METADATA_{key.replace(' ', '_').upper()}"
-                if key in config_text:
-                    env[key] = str(value)
+        resolved = resolve_config_environment(config, metadata)
+        env = resolved.env if resolved is not None else {}
 
         # create project
+        from inspect_ai.log._samples import sample_active
+
+        sample = sample_active()
         project = await ComposeProject.create(
-            name=task_project_name(task_name), config=config, env=env
+            name=task_project_name(task_name),
+            config=config,
+            sample_id=sample.sample.id if sample is not None else None,
+            epoch=sample.epoch if sample is not None else None,
+            env=env,
         )
+
+        # note that the project is running
+        project_startup(project)
 
         try:
             # enumerate the services that will be created
             services = await compose_services(project)
 
             # start the services
-            await compose_up(project, services)
+            result = await compose_up(project, services)
 
             # check to ensure that the services are running
             running_services = await compose_check_running(
                 list(services.keys()), project=project
             )
 
-            # note that the project is running
-            project_startup(project)
+            if not running_services:
+                raise RuntimeError(
+                    f"No services started.\nCompose up stderr: {result.stderr}"
+                )
 
             # create sandbox environments for all running services
             default_service: str | None = None
@@ -209,9 +248,11 @@ class DockerSandboxEnvironment(SandboxEnvironment):
         # (this enables us to show output for the cleanup operation)
         if not interrupted:
             # extract project from first environment
-            project = cast(
-                DockerSandboxEnvironment, next(iter(environments.values()))
-            )._project
+            project = (
+                next(iter(environments.values()))
+                .as_type(DockerSandboxEnvironment)
+                ._project
+            )
             # cleanup the project
             await project_cleanup(project=project, quiet=True)
 
@@ -279,6 +320,9 @@ class DockerSandboxEnvironment(SandboxEnvironment):
 
     @override
     async def write_file(self, file: str, contents: str | bytes) -> None:
+        # defualt timeout for write_file operations
+        TIMEOUT = 180
+
         # resolve relative file paths
         file = self.container_file(file)
 
@@ -293,8 +337,16 @@ class DockerSandboxEnvironment(SandboxEnvironment):
         # write the file
         if isinstance(contents, str):
             result = await self.exec(
-                ["sh", "-e", "-c", 'tee -- "$1"', "write_file_script", file],
+                [
+                    "sh",
+                    "-e",
+                    "-c",
+                    'tee -- "$1" > /dev/null',
+                    "write_file_script",
+                    file,
+                ],
                 input=contents,
+                timeout=TIMEOUT,
             )
         else:
             base64_contents = base64.b64encode(contents).decode("US-ASCII")
@@ -308,6 +360,7 @@ class DockerSandboxEnvironment(SandboxEnvironment):
                     file,
                 ],
                 input=base64_contents,
+                timeout=TIMEOUT,
             )
         if result.returncode != 0:
             if "permission denied" in result.stderr.casefold():
@@ -377,7 +430,7 @@ class DockerSandboxEnvironment(SandboxEnvironment):
                     return f.read()
 
     @override
-    async def connection(self) -> SandboxConnection:
+    async def connection(self, *, user: str | None = None) -> SandboxConnection:
         # find container for service
         services = await compose_ps(project=self._project)
         container = next(
@@ -389,15 +442,33 @@ class DockerSandboxEnvironment(SandboxEnvironment):
             None,
         )
 
+        # vscode doesn't support attaching to a container as a specific user,
+        # so don't include the vscode command if a user is specified
+        vscode_command = (
+            [
+                "remote-containers.attachToRunningContainer",
+                container,
+            ]
+            if user is None
+            else None
+        )
+
         # return container connection
         if container:
             return SandboxConnection(
                 type="docker",
-                command=f"docker exec -it {container} bash -l",
-                vscode_command=[
-                    "remote-containers.attachToRunningContainer",
-                    container,
-                ],
+                command=shlex.join(
+                    [
+                        "docker",
+                        "exec",
+                        "-it",
+                        *(["--user", user] if user else []),
+                        container,
+                        "bash",
+                        "-l",
+                    ]
+                ),
+                vscode_command=vscode_command,
                 ports=await get_ports_info(container),
                 container=container,
             )
@@ -487,3 +558,33 @@ def parse_docker_inspect_ports(json_str: str) -> list[PortMapping] | None:
         )
         port_mappings.append(port_mapping)
     return port_mappings if port_mappings else None
+
+
+class ConfigEnvironment(NamedTuple):
+    config_file: str
+    config_text: str
+    env: dict[str, str]
+
+
+def resolve_config_environment(
+    config: SandboxEnvironmentConfigType | None,
+    metadata: dict[str, str],
+) -> ConfigEnvironment | None:
+    # create environment variables for sample metadata
+    if isinstance(config, str) and Path(config).exists():
+        # read the config file
+        config_file = config
+        with open(config, "r") as f:
+            config_text = f.read()
+
+        # only add metadata files if the key is in the file
+        env: dict[str, str] = {}
+        for key, value in metadata.items():
+            key = f"SAMPLE_METADATA_{key.replace(' ', '_').upper()}"
+            if key in config_text:
+                env[key] = str(value)
+
+        # return resolved
+        return ConfigEnvironment(config_file, config_text, env)
+    else:
+        return None

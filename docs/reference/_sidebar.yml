@@ -29,6 +29,8 @@ website:
           href: reference/inspect_ai.qmd#taskinfo
         - text: Tasks
           href: reference/inspect_ai.qmd#tasks
+        - text: view
+          href: reference/inspect_ai.qmd#view
         - text: task
           href: reference/inspect_ai.qmd#task
       - section: inspect_ai.solver
@@ -52,12 +54,6 @@ website:
           href: reference/inspect_ai.solver.qmd#self_critique
         - text: multiple_choice
           href: reference/inspect_ai.solver.qmd#multiple_choice
-        - text: basic_agent
-          href: reference/inspect_ai.solver.qmd#basic_agent
-        - text: human_agent
-          href: reference/inspect_ai.solver.qmd#human_agent
-        - text: bridge
-          href: reference/inspect_ai.solver.qmd#bridge
         - text: chain
           href: reference/inspect_ai.solver.qmd#chain
         - text: fork
@@ -79,12 +75,32 @@ website:
           href: reference/inspect_ai.tool.qmd#bash
         - text: python
           href: reference/inspect_ai.tool.qmd#python
-        - text: web_search
-          href: reference/inspect_ai.tool.qmd#web_search
+        - text: bash_session
+          href: reference/inspect_ai.tool.qmd#bash_session
+        - text: text_editor
+          href: reference/inspect_ai.tool.qmd#text_editor
         - text: web_browser
           href: reference/inspect_ai.tool.qmd#web_browser
         - text: computer
           href: reference/inspect_ai.tool.qmd#computer
+        - text: web_search
+          href: reference/inspect_ai.tool.qmd#web_search
+        - text: think
+          href: reference/inspect_ai.tool.qmd#think
+        - text: mcp_connection
+          href: reference/inspect_ai.tool.qmd#mcp_connection
+        - text: mcp_server_stdio
+          href: reference/inspect_ai.tool.qmd#mcp_server_stdio
+        - text: mcp_server_http
+          href: reference/inspect_ai.tool.qmd#mcp_server_http
+        - text: mcp_server_sandbox
+          href: reference/inspect_ai.tool.qmd#mcp_server_sandbox
+        - text: mcp_server_sse
+          href: reference/inspect_ai.tool.qmd#mcp_server_sse
+        - text: mcp_tools
+          href: reference/inspect_ai.tool.qmd#mcp_tools
+        - text: MCPServer
+          href: reference/inspect_ai.tool.qmd#mcpserver
         - text: tool_with
           href: reference/inspect_ai.tool.qmd#tool_with
         - text: ToolDef
@@ -107,10 +123,55 @@ website:
           href: reference/inspect_ai.tool.qmd#toolparams
         - text: ToolParam
           href: reference/inspect_ai.tool.qmd#toolparam
-        - text: JSONType
-          href: reference/inspect_ai.tool.qmd#jsontype
+        - text: ToolSource
+          href: reference/inspect_ai.tool.qmd#toolsource
         - text: tool
           href: reference/inspect_ai.tool.qmd#tool
+      - section: inspect_ai.agent
+        href: reference/inspect_ai.agent.qmd
+        contents:
+        - text: react
+          href: reference/inspect_ai.agent.qmd#react
+        - text: human_cli
+          href: reference/inspect_ai.agent.qmd#human_cli
+        - text: handoff
+          href: reference/inspect_ai.agent.qmd#handoff
+        - text: run
+          href: reference/inspect_ai.agent.qmd#run
+        - text: as_tool
+          href: reference/inspect_ai.agent.qmd#as_tool
+        - text: as_solver
+          href: reference/inspect_ai.agent.qmd#as_solver
+        - text: agent_bridge
+          href: reference/inspect_ai.agent.qmd#agent_bridge
+        - text: sandbox_agent_bridge
+          href: reference/inspect_ai.agent.qmd#sandbox_agent_bridge
+        - text: remove_tools
+          href: reference/inspect_ai.agent.qmd#remove_tools
+        - text: last_message
+          href: reference/inspect_ai.agent.qmd#last_message
+        - text: MessageFilter
+          href: reference/inspect_ai.agent.qmd#messagefilter
+        - text: Agent
+          href: reference/inspect_ai.agent.qmd#agent
+        - text: AgentState
+          href: reference/inspect_ai.agent.qmd#agentstate
+        - text: agent
+          href: reference/inspect_ai.agent.qmd#agent
+        - text: agent_with
+          href: reference/inspect_ai.agent.qmd#agent_with
+        - text: is_agent
+          href: reference/inspect_ai.agent.qmd#is_agent
+        - text: AgentPrompt
+          href: reference/inspect_ai.agent.qmd#agentprompt
+        - text: AgentAttempts
+          href: reference/inspect_ai.agent.qmd#agentattempts
+        - text: AgentContinue
+          href: reference/inspect_ai.agent.qmd#agentcontinue
+        - text: AgentSubmit
+          href: reference/inspect_ai.agent.qmd#agentsubmit
+        - text: bridge
+          href: reference/inspect_ai.agent.qmd#bridge
       - section: inspect_ai.scorer
         href: reference/inspect_ai.scorer.qmd
         contents:
@@ -178,6 +239,8 @@ website:
           href: reference/inspect_ai.scorer.qmd#metric
         - text: score_reducer
           href: reference/inspect_ai.scorer.qmd#score_reducer
+        - text: score
+          href: reference/inspect_ai.scorer.qmd#score
       - section: inspect_ai.model
         href: reference/inspect_ai.model.qmd
         contents:
@@ -189,8 +252,16 @@ website:
           href: reference/inspect_ai.model.qmd#generateconfig
         - text: GenerateConfigArgs
           href: reference/inspect_ai.model.qmd#generateconfigargs
+        - text: BatchConfig
+          href: reference/inspect_ai.model.qmd#batchconfig
+        - text: ResponseSchema
+          href: reference/inspect_ai.model.qmd#responseschema
         - text: ModelOutput
           href: reference/inspect_ai.model.qmd#modeloutput
+        - text: ModelCall
+          href: reference/inspect_ai.model.qmd#modelcall
+        - text: ModelConversation
+          href: reference/inspect_ai.model.qmd#modelconversation
         - text: ModelUsage
           href: reference/inspect_ai.model.qmd#modelusage
         - text: StopReason
@@ -209,16 +280,42 @@ website:
           href: reference/inspect_ai.model.qmd#chatmessageassistant
         - text: ChatMessageTool
           href: reference/inspect_ai.model.qmd#chatmessagetool
+        - text: trim_messages
+          href: reference/inspect_ai.model.qmd#trim_messages
+        - text: user_prompt
+          href: reference/inspect_ai.model.qmd#user_prompt
         - text: Content
           href: reference/inspect_ai.model.qmd#content
         - text: ContentText
           href: reference/inspect_ai.model.qmd#contenttext
+        - text: ContentReasoning
+          href: reference/inspect_ai.model.qmd#contentreasoning
         - text: ContentImage
           href: reference/inspect_ai.model.qmd#contentimage
         - text: ContentAudio
           href: reference/inspect_ai.model.qmd#contentaudio
         - text: ContentVideo
           href: reference/inspect_ai.model.qmd#contentvideo
+        - text: ContentDocument
+          href: reference/inspect_ai.model.qmd#contentdocument
+        - text: ContentData
+          href: reference/inspect_ai.model.qmd#contentdata
+        - text: ContentToolUse
+          href: reference/inspect_ai.model.qmd#contenttooluse
+        - text: Citation
+          href: reference/inspect_ai.model.qmd#citation
+        - text: CitationBase
+          href: reference/inspect_ai.model.qmd#citationbase
+        - text: UrlCitation
+          href: reference/inspect_ai.model.qmd#urlcitation
+        - text: DocumentCitation
+          href: reference/inspect_ai.model.qmd#documentcitation
+        - text: ContentCitation
+          href: reference/inspect_ai.model.qmd#contentcitation
+        - text: execute_tools
+          href: reference/inspect_ai.model.qmd#execute_tools
+        - text: ExecuteToolsResult
+          href: reference/inspect_ai.model.qmd#executetoolsresult
         - text: Logprob
           href: reference/inspect_ai.model.qmd#logprob
         - text: Logprobs
@@ -237,6 +334,10 @@ website:
           href: reference/inspect_ai.model.qmd#cache_prune
         - text: cache_path
           href: reference/inspect_ai.model.qmd#cache_path
+        - text: messages_to_openai
+          href: reference/inspect_ai.model.qmd#messages_to_openai
+        - text: messages_from_openai
+          href: reference/inspect_ai.model.qmd#messages_from_openai
         - text: modelapi
           href: reference/inspect_ai.model.qmd#modelapi
         - text: ModelAPI
@@ -284,12 +385,18 @@ website:
           href: reference/inspect_ai.log.qmd#list_eval_logs
         - text: write_eval_log
           href: reference/inspect_ai.log.qmd#write_eval_log
+        - text: write_eval_log_async
+          href: reference/inspect_ai.log.qmd#write_eval_log_async
         - text: read_eval_log
           href: reference/inspect_ai.log.qmd#read_eval_log
+        - text: read_eval_log_async
+          href: reference/inspect_ai.log.qmd#read_eval_log_async
         - text: read_eval_log_sample
           href: reference/inspect_ai.log.qmd#read_eval_log_sample
         - text: read_eval_log_samples
           href: reference/inspect_ai.log.qmd#read_eval_log_samples
+        - text: read_eval_log_sample_summaries
+          href: reference/inspect_ai.log.qmd#read_eval_log_sample_summaries
         - text: convert_eval_logs
           href: reference/inspect_ai.log.qmd#convert_eval_logs
         - text: bundle_log_dir
@@ -308,6 +415,8 @@ website:
           href: reference/inspect_ai.log.qmd#evaldataset
         - text: EvalConfig
           href: reference/inspect_ai.log.qmd#evalconfig
+        - text: EvalModelConfig
+          href: reference/inspect_ai.log.qmd#evalmodelconfig
         - text: EvalRevision
           href: reference/inspect_ai.log.qmd#evalrevision
         - text: EvalPlan
@@ -328,18 +437,32 @@ website:
           href: reference/inspect_ai.log.qmd#evalerror
         - text: EvalSample
           href: reference/inspect_ai.log.qmd#evalsample
+        - text: EvalSampleSummary
+          href: reference/inspect_ai.log.qmd#evalsamplesummary
         - text: EvalSampleLimit
           href: reference/inspect_ai.log.qmd#evalsamplelimit
         - text: EvalSampleReductions
           href: reference/inspect_ai.log.qmd#evalsamplereductions
         - text: EvalSampleScore
           href: reference/inspect_ai.log.qmd#evalsamplescore
+        - text: WriteConflictError
+          href: reference/inspect_ai.log.qmd#writeconflicterror
         - text: transcript
           href: reference/inspect_ai.log.qmd#transcript
         - text: Transcript
           href: reference/inspect_ai.log.qmd#transcript
         - text: Event
           href: reference/inspect_ai.log.qmd#event
+        - text: event_tree
+          href: reference/inspect_ai.log.qmd#event_tree
+        - text: event_sequence
+          href: reference/inspect_ai.log.qmd#event_sequence
+        - text: EventTree
+          href: reference/inspect_ai.log.qmd#eventtree
+        - text: EventNode
+          href: reference/inspect_ai.log.qmd#eventnode
+        - text: SpanNode
+          href: reference/inspect_ai.log.qmd#spannode
         - text: SampleInitEvent
           href: reference/inspect_ai.log.qmd#sampleinitevent
         - text: SampleLimitEvent
@@ -352,12 +475,12 @@ website:
           href: reference/inspect_ai.log.qmd#modelevent
         - text: ToolEvent
           href: reference/inspect_ai.log.qmd#toolevent
+        - text: SandboxEvent
+          href: reference/inspect_ai.log.qmd#sandboxevent
         - text: ApprovalEvent
           href: reference/inspect_ai.log.qmd#approvalevent
         - text: InputEvent
           href: reference/inspect_ai.log.qmd#inputevent
-        - text: StoreEvent
-          href: reference/inspect_ai.log.qmd#storeevent
         - text: ErrorEvent
           href: reference/inspect_ai.log.qmd#errorevent
         - text: LoggerEvent
@@ -368,10 +491,87 @@ website:
           href: reference/inspect_ai.log.qmd#loggingmessage
         - text: InfoEvent
           href: reference/inspect_ai.log.qmd#infoevent
-        - text: StepEvent
-          href: reference/inspect_ai.log.qmd#stepevent
+        - text: SpanBeginEvent
+          href: reference/inspect_ai.log.qmd#spanbeginevent
+        - text: SpanEndEvent
+          href: reference/inspect_ai.log.qmd#spanendevent
         - text: SubtaskEvent
           href: reference/inspect_ai.log.qmd#subtaskevent
+      - section: inspect_ai.analysis
+        href: reference/inspect_ai.analysis.qmd
+        contents:
+        - text: evals_df
+          href: reference/inspect_ai.analysis.qmd#evals_df
+        - text: EvalColumn
+          href: reference/inspect_ai.analysis.qmd#evalcolumn
+        - text: EvalColumns
+          href: reference/inspect_ai.analysis.qmd#evalcolumns
+        - text: EvalInfo
+          href: reference/inspect_ai.analysis.qmd#evalinfo
+        - text: EvalTask
+          href: reference/inspect_ai.analysis.qmd#evaltask
+        - text: EvalModel
+          href: reference/inspect_ai.analysis.qmd#evalmodel
+        - text: EvalConfiguration
+          href: reference/inspect_ai.analysis.qmd#evalconfiguration
+        - text: EvalResults
+          href: reference/inspect_ai.analysis.qmd#evalresults
+        - text: EvalScores
+          href: reference/inspect_ai.analysis.qmd#evalscores
+        - text: samples_df
+          href: reference/inspect_ai.analysis.qmd#samples_df
+        - text: SampleColumn
+          href: reference/inspect_ai.analysis.qmd#samplecolumn
+        - text: SampleSummary
+          href: reference/inspect_ai.analysis.qmd#samplesummary
+        - text: SampleMessages
+          href: reference/inspect_ai.analysis.qmd#samplemessages
+        - text: messages_df
+          href: reference/inspect_ai.analysis.qmd#messages_df
+        - text: MessageFilter
+          href: reference/inspect_ai.analysis.qmd#messagefilter
+        - text: MessageColumn
+          href: reference/inspect_ai.analysis.qmd#messagecolumn
+        - text: MessageContent
+          href: reference/inspect_ai.analysis.qmd#messagecontent
+        - text: MessageToolCalls
+          href: reference/inspect_ai.analysis.qmd#messagetoolcalls
+        - text: MessageColumns
+          href: reference/inspect_ai.analysis.qmd#messagecolumns
+        - text: events_df
+          href: reference/inspect_ai.analysis.qmd#events_df
+        - text: EventColumn
+          href: reference/inspect_ai.analysis.qmd#eventcolumn
+        - text: EventInfo
+          href: reference/inspect_ai.analysis.qmd#eventinfo
+        - text: EventTiming
+          href: reference/inspect_ai.analysis.qmd#eventtiming
+        - text: ModelEventColumns
+          href: reference/inspect_ai.analysis.qmd#modeleventcolumns
+        - text: ToolEventColumns
+          href: reference/inspect_ai.analysis.qmd#tooleventcolumns
+        - text: prepare
+          href: reference/inspect_ai.analysis.qmd#prepare
+        - text: log_viewer
+          href: reference/inspect_ai.analysis.qmd#log_viewer
+        - text: model_info
+          href: reference/inspect_ai.analysis.qmd#model_info
+        - text: task_info
+          href: reference/inspect_ai.analysis.qmd#task_info
+        - text: frontier
+          href: reference/inspect_ai.analysis.qmd#frontier
+        - text: score_to_float
+          href: reference/inspect_ai.analysis.qmd#score_to_float
+        - text: Operation
+          href: reference/inspect_ai.analysis.qmd#operation
+        - text: ModelInfo
+          href: reference/inspect_ai.analysis.qmd#modelinfo
+        - text: Column
+          href: reference/inspect_ai.analysis.qmd#column
+        - text: ColumnType
+          href: reference/inspect_ai.analysis.qmd#columntype
+        - text: ColumnError
+          href: reference/inspect_ai.analysis.qmd#columnerror
       - section: inspect_ai.util
         href: reference/inspect_ai.util.qmd
         contents:
@@ -383,26 +583,48 @@ website:
           href: reference/inspect_ai.util.qmd#store_as
         - text: StoreModel
           href: reference/inspect_ai.util.qmd#storemodel
+        - text: message_limit
+          href: reference/inspect_ai.util.qmd#message_limit
+        - text: token_limit
+          href: reference/inspect_ai.util.qmd#token_limit
+        - text: time_limit
+          href: reference/inspect_ai.util.qmd#time_limit
+        - text: working_limit
+          href: reference/inspect_ai.util.qmd#working_limit
+        - text: apply_limits
+          href: reference/inspect_ai.util.qmd#apply_limits
+        - text: sample_limits
+          href: reference/inspect_ai.util.qmd#sample_limits
+        - text: SampleLimits
+          href: reference/inspect_ai.util.qmd#samplelimits
+        - text: Limit
+          href: reference/inspect_ai.util.qmd#limit
+        - text: LimitExceededError
+          href: reference/inspect_ai.util.qmd#limitexceedederror
         - text: concurrency
           href: reference/inspect_ai.util.qmd#concurrency
         - text: subprocess
           href: reference/inspect_ai.util.qmd#subprocess
         - text: ExecResult
           href: reference/inspect_ai.util.qmd#execresult
+        - text: display_counter
+          href: reference/inspect_ai.util.qmd#display_counter
         - text: display_type
           href: reference/inspect_ai.util.qmd#display_type
         - text: DisplayType
           href: reference/inspect_ai.util.qmd#displaytype
         - text: input_screen
           href: reference/inspect_ai.util.qmd#input_screen
-        - text: subtask
-          href: reference/inspect_ai.util.qmd#subtask
-        - text: Subtask
-          href: reference/inspect_ai.util.qmd#subtask
+        - text: span
+          href: reference/inspect_ai.util.qmd#span
+        - text: collect
+          href: reference/inspect_ai.util.qmd#collect
         - text: resource
           href: reference/inspect_ai.util.qmd#resource
         - text: throttle
           href: reference/inspect_ai.util.qmd#throttle
+        - text: background
+          href: reference/inspect_ai.util.qmd#background
         - text: trace_action
           href: reference/inspect_ai.util.qmd#trace_action
         - text: trace_message
@@ -411,12 +633,49 @@ website:
           href: reference/inspect_ai.util.qmd#sandbox
         - text: sandbox_with
           href: reference/inspect_ai.util.qmd#sandbox_with
+        - text: sandbox_default
+          href: reference/inspect_ai.util.qmd#sandbox_default
         - text: SandboxEnvironment
           href: reference/inspect_ai.util.qmd#sandboxenvironment
         - text: SandboxConnection
           href: reference/inspect_ai.util.qmd#sandboxconnection
         - text: sandboxenv
           href: reference/inspect_ai.util.qmd#sandboxenv
+        - text: sandbox_service
+          href: reference/inspect_ai.util.qmd#sandbox_service
+        - text: registry_create
+          href: reference/inspect_ai.util.qmd#registry_create
+        - text: RegistryType
+          href: reference/inspect_ai.util.qmd#registrytype
+        - text: JSONType
+          href: reference/inspect_ai.util.qmd#jsontype
+        - text: JSONSchema
+          href: reference/inspect_ai.util.qmd#jsonschema
+        - text: json_schema
+          href: reference/inspect_ai.util.qmd#json_schema
+      - section: inspect_ai.hooks
+        href: reference/inspect_ai.hooks.qmd
+        contents:
+        - text: Hooks
+          href: reference/inspect_ai.hooks.qmd#hooks
+        - text: hooks
+          href: reference/inspect_ai.hooks.qmd#hooks
+        - text: ApiKeyOverride
+          href: reference/inspect_ai.hooks.qmd#apikeyoverride
+        - text: ModelUsageData
+          href: reference/inspect_ai.hooks.qmd#modelusagedata
+        - text: RunEnd
+          href: reference/inspect_ai.hooks.qmd#runend
+        - text: RunStart
+          href: reference/inspect_ai.hooks.qmd#runstart
+        - text: SampleEnd
+          href: reference/inspect_ai.hooks.qmd#sampleend
+        - text: SampleStart
+          href: reference/inspect_ai.hooks.qmd#samplestart
+        - text: TaskEnd
+          href: reference/inspect_ai.hooks.qmd#taskend
+        - text: TaskStart
+          href: reference/inspect_ai.hooks.qmd#taskstart
     - section: Inspect CLI
       href: reference/inspect_eval.qmd
       contents:

@@ -4,7 +4,7 @@ import sys
 import traceback
 from logging import getLogger
 from types import TracebackType
-from typing import Any, Literal, Type, TypedDict
+from typing import Any, Literal, Tuple, Type, TypedDict
 
 import click
 import tenacity
@@ -17,12 +17,15 @@ from pydantic import (
 )
 from rich.console import Console, RenderableType
 from rich.traceback import Traceback
+from shortuuid import uuid
 
-from inspect_ai._util.constants import CONSOLE_DISPLAY_WIDTH, PKG_NAME
+from inspect_ai._util.constants import CONSOLE_DISPLAY_WIDTH, DESERIALIZING, PKG_NAME
 from inspect_ai._util.error import EvalError, exception_message
+from inspect_ai._util.hash import base57_id_hash
+from inspect_ai._util.json import to_json_str_safe
 from inspect_ai._util.logger import warn_once
+from inspect_ai._util.metadata import MT, metadata_as
 from inspect_ai.approval._policy import ApprovalPolicyConfig
-from inspect_ai.dataset._dataset import MT, metadata_as
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput, ModelUsage
 from inspect_ai.scorer import Score
 from inspect_ai.util._sandbox.environment import SandboxEnvironmentSpec
@@ -30,6 +33,7 @@ from inspect_ai.util._store import Store
 from inspect_ai.util._store_model import SMT
 
 from ._transcript import Event
+from ._util import thin_input, thin_metadata, thin_text
 
 logger = getLogger(__name__)
 
@@ -42,6 +46,7 @@ class EvalConfigDefaults(TypedDict):
     fail_on_error: bool
     sandbox_cleanup: bool
     log_samples: bool
+    log_realtime: bool
     log_images: bool
     score_display: bool
 
@@ -53,6 +58,7 @@ def eval_config_defaults() -> EvalConfigDefaults:
         "fail_on_error": True,
         "sandbox_cleanup": True,
         "log_samples": True,
+        "log_realtime": True,
         "log_images": True,
         "score_display": True,
     }
@@ -64,8 +70,13 @@ class EvalConfig(BaseModel):
     limit: int | tuple[int, int] | None = Field(default=None)
     """Sample limit (number of samples or range of samples)."""
 
-    sample_id: str | int | list[str | int] | None = Field(default=None)
+    sample_id: str | int | list[str] | list[int] | list[str | int] | None = Field(
+        default=None
+    )
     """Evaluate specific sample(s)."""
+
+    sample_shuffle: bool | int | None = Field(default=None)
+    """Shuffle order of samples."""
 
     epochs: int | None = Field(default=None)
     """Number of epochs to run samples over."""
@@ -85,14 +96,20 @@ class EvalConfig(BaseModel):
     of samples fails.
     """
 
+    retry_on_error: int | None = Field(default=None)
+    """Number of times to retry samples if they encounter errors."""
+
     message_limit: int | None = Field(default=None)
-    """Maximum messages to allow in a chat conversation."""
+    """Maximum messages to allow per sample."""
 
     token_limit: int | None = Field(default=None)
-    """Maximum tokens to allow in a chat conversation."""
+    """Maximum tokens usage per sample."""
 
     time_limit: int | None = Field(default=None)
-    """Maximum seconds for chat conversation."""
+    """Maximum clock time per sample."""
+
+    working_limit: int | None = Field(default=None)
+    """Meximum working time per sample."""
 
     max_samples: int | None = Field(default=None)
     """Maximum number of samples to run in parallel."""
@@ -112,11 +129,17 @@ class EvalConfig(BaseModel):
     log_samples: bool | None = Field(default=None)
     """Log detailed information on each sample."""
 
+    log_realtime: bool | None = Field(default=None)
+    """Log events in realtime (enables live viewing of samples in inspect view)."""
+
     log_images: bool | None = Field(default=None)
     """Log base64 encoded versions of images."""
 
     log_buffer: int | None = Field(default=None)
     """Number of samples to buffer before writing log file."""
+
+    log_shared: int | None = Field(default=None)
+    """Interval (in seconds) for syncing sample events to log directory."""
 
     score_display: bool | None = Field(default=None)
     """Display scoring metrics realtime."""
@@ -139,13 +162,91 @@ class EvalConfig(BaseModel):
 
 
 class EvalSampleLimit(BaseModel):
-    """Limit encontered by sample."""
+    """Limit encountered by sample."""
 
-    type: Literal["context", "time", "message", "token", "operator", "custom"]
+    type: Literal[
+        "context", "time", "working", "message", "token", "operator", "custom"
+    ]
     """The type of limit"""
 
-    limit: int
+    limit: float
     """The limit value"""
+
+
+class EvalSampleSummary(BaseModel):
+    """Summary information (including scoring) for a sample."""
+
+    id: int | str
+    """Unique id for sample."""
+
+    epoch: int
+    """Epoch number for sample."""
+
+    input: str | list[ChatMessage]
+    """Sample input (text inputs only)."""
+
+    target: str | list[str]
+    """Sample target value(s)"""
+
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    """Sample metadata (scalar types only, strings truncated to 1k)."""
+
+    scores: dict[str, Score] | None = Field(default=None)
+    """Scores for sample (score values only, no answers, explanations, or metadata)."""
+
+    model_usage: dict[str, ModelUsage] = Field(default_factory=dict)
+    """Model token usage for sample."""
+
+    total_time: float | None = Field(default=None)
+    """Total time that the sample was running."""
+
+    working_time: float | None = Field(default=None)
+    """Time spent working (model generation, sandbox calls, etc.)"""
+
+    uuid: str | None = Field(default=None)
+    """Globally unique identifier for sample run (exists for samples created in Inspect >= 0.3.70)"""
+
+    error: str | None = Field(default=None)
+    """Error that halted sample."""
+
+    limit: str | None = Field(default=None)
+    """Limit that halted the sample"""
+
+    retries: int | None = Field(default=None)
+    """Number of retries for the sample."""
+
+    completed: bool = Field(default=False)
+    """Is the sample complete."""
+
+    @model_validator(mode="after")
+    def thin_data(self) -> "EvalSampleSummary":
+        # thin input
+        self.input = thin_input(self.input)
+
+        # thin metadata
+        self.metadata = thin_metadata(self.metadata)
+
+        # thin score explanations and metadata
+        if self.scores is not None:
+            self.scores = {
+                key: Score(
+                    value=score.value,
+                    answer=thin_text(score.answer)
+                    if score.answer is not None
+                    else None,
+                    explanation=thin_text(score.explanation)
+                    if score.explanation is not None
+                    else None,
+                    metadata=thin_metadata(score.metadata)
+                    if score.metadata is not None
+                    else None,
+                )
+                for key, score in self.scores.items()
+            }
+        return self
+
+    # allow field model_usage
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class EvalSample(BaseModel):
@@ -175,16 +276,16 @@ class EvalSample(BaseModel):
     setup: str | None = Field(default=None)
     """Setup script to run for sample (run within default SandboxEnvironment)."""
 
-    messages: list[ChatMessage]
+    messages: list[ChatMessage] = Field(default_factory=list)
     """Chat conversation history for sample."""
 
-    output: ModelOutput
+    output: ModelOutput = Field(default_factory=ModelOutput)
     """Model output from sample."""
 
     scores: dict[str, Score] | None = Field(default=None)
     """Scores for sample."""
 
-    metadata: dict[str, Any]
+    metadata: dict[str, Any] = Field(default_factory=dict)
     """Additional sample metadata."""
 
     def metadata_as(self, metadata_cls: Type[MT]) -> MT:
@@ -201,16 +302,31 @@ class EvalSample(BaseModel):
     store: dict[str, Any] = Field(default_factory=dict)
     """State at end of sample execution."""
 
-    def store_as(self, model_cls: Type[SMT]) -> SMT:
+    def store_as(self, model_cls: Type[SMT], instance: str | None = None) -> SMT:
         """Pydantic model interface to the store.
 
         Args:
           model_cls: Pydantic model type (must derive from StoreModel)
+          instance: Optional instances name for store (enables multiple instances
+            of a given StoreModel type within a single sample)
 
         Returns:
-          StoreModel: Instance of model_cls bound to sample store data.
+          StoreModel: model_cls bound to sample store data.
         """
-        return model_cls(store=Store(self.store))
+        # un-namespace names for creation
+        data = {
+            k.replace(f"{model_cls.__name__}:", "", 1): v for k, v in self.store.items()
+        }
+
+        # since we are reading from the log provide a fully detached store
+        data["store"] = Store()
+
+        # provide instance if specified
+        if instance is not None:
+            data["instance"] = instance
+
+        # create the model
+        return model_cls.model_validate(data)
 
     events: list[Event] = Field(default_factory=list)
     """Events that occurred during sample execution."""
@@ -218,8 +334,20 @@ class EvalSample(BaseModel):
     model_usage: dict[str, ModelUsage] = Field(default_factory=dict)
     """Model token usage for sample."""
 
+    total_time: float | None = Field(default=None)
+    """Total time that the sample was running."""
+
+    working_time: float | None = Field(default=None)
+    """Time spent working (model generation, sandbox calls, etc.)"""
+
+    uuid: str | None = Field(default=None)
+    """Globally unique identifier for sample run (exists for samples created in Inspect >= 0.3.70)"""
+
     error: EvalError | None = Field(default=None)
     """Error that halted sample."""
+
+    error_retries: list[EvalError] | None = Field(default=None)
+    """Errors that were retried for this sample."""
 
     attachments: dict[str, str] = Field(default_factory=dict)
     """Attachments referenced from messages and events.
@@ -230,6 +358,35 @@ class EvalSample(BaseModel):
 
     limit: EvalSampleLimit | None = Field(default=None)
     """The limit that halted the sample"""
+
+    def summary(self) -> EvalSampleSummary:
+        """Summary of sample.
+
+        The summary excludes potentially large fields like messages, output,
+        events, store, and metadata so that it is always fast to load.
+
+        If there are images, audio, or video in the input, they are
+        replaced with a placeholder.
+
+        Returns:
+           Summary of sample.
+        """
+        return EvalSampleSummary(
+            id=self.id,
+            epoch=self.epoch,
+            input=self.input,
+            target=self.target,
+            metadata=self.metadata,
+            scores=self.scores,
+            model_usage=self.model_usage,
+            total_time=self.total_time,
+            working_time=self.working_time,
+            uuid=self.uuid,
+            error=self.error.message if self.error is not None else None,
+            limit=f"{self.limit.type}" if self.limit is not None else None,
+            retries=len(self.error_retries) if self.error_retries is not None else None,
+            completed=True,
+        )
 
     # deprecated properties
 
@@ -281,7 +438,7 @@ class EvalSample(BaseModel):
             # warning will handle this)
             del values["transcript"]
 
-        return values
+        return migrate_values(values)
 
     # allow field model_usage
     model_config = ConfigDict(protected_namespaces=())
@@ -348,6 +505,12 @@ class EvalScore(BaseModel):
 
     reducer: str | None = Field(default=None)
     """Reducer name."""
+
+    scored_samples: int | None = Field(default=None)
+    """Number of samples scored by this scorer."""
+
+    unscored_samples: int | None = Field(default=None)
+    """Number of samples not scored by this scorer."""
 
     params: dict[str, Any] = Field(default_factory=dict)
     """Parameters specified when creating scorer."""
@@ -475,7 +638,7 @@ class EvalDataset(BaseModel):
     samples: int | None = Field(default=None)
     """Number of samples in the dataset."""
 
-    sample_ids: list[int | str] | None = Field(default=None)
+    sample_ids: list[str] | list[int] | list[str | int] | None = Field(default=None)
     """IDs of samples in the dataset."""
 
     shuffled: bool | None = Field(default=None)
@@ -519,8 +682,27 @@ class EvalRevision(BaseModel):
     """Revision commit."""
 
 
+class EvalModelConfig(BaseModel):
+    """Model config."""
+
+    model: str
+    """Model name."""
+
+    config: GenerateConfig = Field(default_factory=GenerateConfig)
+    """Generate config"""
+
+    base_url: str | None = Field(default=None)
+    """Model base url."""
+
+    args: dict[str, Any] = Field(default_factory=dict)
+    """Model specific arguments."""
+
+
 class EvalSpec(BaseModel):
     """Eval target and configuration."""
+
+    eval_id: str = Field(default_factory=str)
+    """Globally unique id for eval."""
 
     run_id: str = Field(default_factory=str)
     """Unique run id"""
@@ -534,17 +716,26 @@ class EvalSpec(BaseModel):
     task_id: str = Field(default_factory=str)
     """Unique task id."""
 
-    task_version: int = Field(default=0)
+    task_version: int | str = Field(default=0)
     """Task version."""
 
     task_file: str | None = Field(default=None)
     """Task source file."""
 
+    task_display_name: str | None = Field(default=None)
+    """Task display name."""
+
+    task_registry_name: str | None = Field(default=None)
+    """Task registry name."""
+
     task_attribs: dict[str, Any] = Field(default_factory=dict)
     """Attributes of the @task decorator."""
 
     task_args: dict[str, Any] = Field(default_factory=dict)
-    """Arguments used for invoking the task."""
+    """Arguments used for invoking the task (including defaults)."""
+
+    task_args_passed: dict[str, Any] = Field(default_factory=dict)
+    """Arguments explicitly passed by caller for invoking the task."""
 
     solver: str | None = Field(default=None)
     """Solver name."""
@@ -564,11 +755,17 @@ class EvalSpec(BaseModel):
     model: str
     """Model used for eval."""
 
+    model_generate_config: GenerateConfig = Field(default_factory=GenerateConfig)
+    """Generate config specified for model instance."""
+
     model_base_url: str | None = Field(default=None)
     """Optional override of model base url"""
 
     model_args: dict[str, Any] = Field(default_factory=dict)
     """Model specific arguments."""
+
+    model_roles: dict[str, EvalModelConfig] | None = Field(default=None)
+    """Model roles."""
 
     config: EvalConfig
     """Configuration values for eval."""
@@ -593,6 +790,40 @@ class EvalSpec(BaseModel):
     # allow field model_args
     model_config = ConfigDict(protected_namespaces=())
 
+    def model_post_init(self, __context: Any) -> None:
+        # check if deserializing
+        is_deserializing = isinstance(__context, dict) and __context.get(
+            DESERIALIZING, False
+        )
+
+        # Generate eval_id if needed
+        if self.eval_id == "":
+            if is_deserializing:
+                # we want the eval_id to be stable across reads of the eval log so we compose it
+                # as a hash that matches the size/apperance of shortuuid-based uuids
+                self.eval_id = base57_id_hash(self.run_id + self.task_id + self.created)
+            else:
+                self.eval_id = uuid()
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_sandbox_spec(
+        cls: Type["EvalSpec"], values: dict[str, Any]
+    ) -> dict[str, Any]:
+        return migrate_values(values)
+
+
+def migrate_values(values: dict[str, Any]) -> dict[str, Any]:
+    if "sandbox" in values:
+        sandbox = values.get("sandbox")
+        if isinstance(sandbox, list):
+            values["sandbox"] = SandboxEnvironmentSpec(
+                type=sandbox[0], config=sandbox[1]
+            )
+    if "task_args_passed" not in values:
+        values["task_args_passed"] = values.get("task_args", {})
+    return values
+
 
 def eval_error(
     exception: BaseException,
@@ -601,14 +832,15 @@ def eval_error(
     exc_traceback: TracebackType | None,
 ) -> EvalError:
     # get text traceback
-    traceback_text = "\n".join(
-        traceback.format_exception(exc_type, exc_value, exc_traceback)
-    )
+    traceback_text, truncated = truncate_traceback(exc_type, exc_value, exc_traceback)
 
-    with open(os.devnull, "w") as f:
-        console = Console(record=True, file=f, legacy_windows=True)
-        console.print(rich_traceback(exc_type, exc_value, exc_traceback))
-        traceback_ansi = console.export_text(styles=True)
+    if not truncated:
+        with open(os.devnull, "w") as f:
+            console = Console(record=True, file=f, legacy_windows=True)
+            console.print(rich_traceback(exc_type, exc_value, exc_traceback))
+            traceback_ansi = console.export_text(styles=True)
+    else:
+        traceback_ansi = traceback_text
 
     # return error
     return EvalError(
@@ -626,10 +858,55 @@ def rich_traceback(
         exc_value=exc_value,
         traceback=exc_traceback,
         suppress=[click, asyncio, tenacity, sys.modules[PKG_NAME]],
-        show_locals=False,
+        show_locals=os.environ.get("INSPECT_TRACEBACK_LOCALS", None) == "1",
         width=CONSOLE_DISPLAY_WIDTH,
     )
     return rich_tb
+
+
+def truncate_traceback(
+    exc_type: Type[Any],
+    exc_value: BaseException,
+    exc_traceback: TracebackType | None,
+    max_length: int = 1048576,  # 1MB
+) -> Tuple[str, bool]:
+    tb_list = traceback.format_exception(exc_type, exc_value, exc_traceback)
+
+    # Keep the front and back of the traceback
+    header = tb_list[0]
+    error_msg = tb_list[-1]
+
+    # Join the middle parts (stack frames)
+    frames = "".join(tb_list[1:-1])
+
+    # It all fits, use it as is
+    full_tb = header + frames + error_msg
+    if len(full_tb) <= max_length:
+        return full_tb, False
+
+    ellipsis = "\n...\n"
+
+    # Minimum header size
+    header_size = min(len(header), 1024)
+
+    # Minimum frames size
+    frames_size = min(len(frames), 1024)
+
+    # Remaining space for error message
+    error_msg_size = max(0, max_length - header_size - frames_size)
+
+    def truncate_middle(text: str, size: int) -> str:
+        if len(text) <= size:
+            return text
+        half = (size - len(ellipsis)) // 2
+        return f"{text[:half]}{ellipsis}{text[-half:]}"
+
+    # Truncate each part as needed
+    truncated_header = truncate_middle(header, header_size)
+    truncated_frames = truncate_middle(frames, frames_size)
+    truncated_error = truncate_middle(error_msg, error_msg_size)
+
+    return truncated_header + truncated_frames + truncated_error, True
 
 
 class EvalStats(BaseModel):
@@ -687,6 +964,9 @@ class EvalLog(BaseModel):
     location: str = Field(default_factory=str, exclude=True)
     """Location that the log file was read from."""
 
+    etag: str | None = Field(default=None, exclude=True)
+    """ETag from S3 for conditional writes."""
+
     @model_validator(mode="after")
     def populate_scorer_name_for_samples(self) -> "EvalLog":
         if self.samples and self.results and self.results.scores:
@@ -714,6 +994,15 @@ class EvalLog(BaseModel):
         elif has_reductions and (has_results and not has_sample_reductions):
             values["results"]["sample_reductions"] = values["reductions"]
         return values
+
+    def __repr__(self) -> str:
+        return to_json_str_safe(
+            self.model_dump(
+                exclude={"samples", "reductions"},
+                exclude_none=True,
+                fallback=lambda _: None,
+            )
+        )
 
 
 def sort_samples(samples: list[EvalSample]) -> None:

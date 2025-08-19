@@ -1,17 +1,28 @@
-import asyncio
+from pathlib import Path
 from textwrap import dedent
 
 import pytest
+from test_helpers.utils import skip_if_no_docker
 
 from inspect_ai import Task, eval
 from inspect_ai.solver import Generate, Solver, TaskState, solver
-from inspect_ai.util import ExecResult, sandbox
+from inspect_ai.util import sandbox
+from inspect_ai.util._background import background
 from inspect_ai.util._sandbox.service import sandbox_service
 
 
 @pytest.mark.slow
-def test_sandbox_service():
-    log = eval(Task(solver=math_service()), model="mockllm/model", sandbox="docker")[0]
+@skip_if_no_docker
+@pytest.mark.parametrize("user", ["root", "nonroot", None])
+def test_sandbox_service(user: str | None):
+    log = eval(
+        Task(solver=math_service(user)),
+        model="mockllm/model",
+        sandbox=(
+            "docker",
+            str(Path(__file__).parent / "compose.sandbox-service.yaml"),
+        ),
+    )[0]
     assert log.status == "success"
     assert log.samples
     sample = log.samples[0]
@@ -19,7 +30,7 @@ def test_sandbox_service():
 
 
 @solver
-def math_service() -> Solver:
+def math_service(user: str | None) -> Solver:
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         # generate a script that will exercise the service and copy it to the sandbox
         run_script = "run.py"
@@ -45,23 +56,27 @@ def math_service() -> Solver:
 
         asyncio.run(run())
         """)
-        await sandbox().write_file(run_script, run_script_code)
+        # run the math service in the background
+        background(run_math_service, state, user)
 
-        # run the script and the math service
-        for task in asyncio.as_completed(
-            [sandbox().exec(["python3", run_script]), run_math_service(state)]
-        ):
-            result = await task
-            if isinstance(result, ExecResult) and not result.success:
-                print(f"Error running script '{run_script}': {result.stderr}")
-                break
+        # run a script in the sandbox that talks to the service
+        await sandbox().write_file(run_script, run_script_code)
+        script_error = ""
+        try:
+            result = await sandbox().exec(["python3", run_script], user=user)
+            if not result.success:
+                script_error = f"Error running script '{run_script}': {result.stderr}"
+        except Exception as e:
+            script_error = f"Exception in script: {str(e)}"
+        if script_error:
+            print(script_error)
 
         return state
 
     return solve
 
 
-async def run_math_service(state: TaskState) -> None:
+async def run_math_service(state: TaskState, user: str | None) -> None:
     finished = False
 
     async def add(x: int, y: int) -> int:
@@ -80,4 +95,5 @@ async def run_math_service(state: TaskState) -> None:
         methods=[add, subtract, finish],
         until=lambda: finished,
         sandbox=sandbox(),
+        user=user,
     )

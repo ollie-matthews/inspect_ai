@@ -1,10 +1,21 @@
 # ruff: noqa: F401 F403 F405
 
+from inspect_ai._util.citation import (
+    Citation,
+    CitationBase,
+    ContentCitation,
+    DocumentCitation,
+    UrlCitation,
+)
 from inspect_ai._util.content import (
     Content,
     ContentAudio,
+    ContentData,
+    ContentDocument,
     ContentImage,
+    ContentReasoning,
     ContentText,
+    ContentToolUse,
     ContentVideo,
 )
 from inspect_ai._util.deprecation import relocated_module_attribute
@@ -17,7 +28,7 @@ from ._cache import (
     cache_prune,
     cache_size,
 )
-from ._call_tools import call_tools
+from ._call_tools import ExecuteToolsResult, call_tools, execute_tools
 from ._chat_message import (
     ChatMessage,
     ChatMessageAssistant,
@@ -26,13 +37,20 @@ from ._chat_message import (
     ChatMessageTool,
     ChatMessageUser,
 )
-from ._generate_config import GenerateConfig, GenerateConfigArgs
+from ._conversation import ModelConversation
+from ._generate_config import (
+    BatchConfig,
+    GenerateConfig,
+    GenerateConfigArgs,
+    ResponseSchema,
+)
 from ._model import (
     Model,
     ModelAPI,
     ModelName,
     get_model,
 )
+from ._model_call import ModelCall
 from ._model_output import (
     ChatCompletionChoice,
     Logprob,
@@ -42,17 +60,27 @@ from ._model_output import (
     StopReason,
     TopLogprob,
 )
+from ._openai import messages_from_openai, messages_to_openai
+from ._prompt import user_prompt
 from ._providers.providers import *
 from ._registry import modelapi
+from ._trim import trim_messages
 
 __all__ = [
+    "BatchConfig",
     "GenerateConfig",
     "GenerateConfigArgs",
+    "ResponseSchema",
     "CachePolicy",
     "ContentAudio",
+    "ContentData",
+    "ContentToolUse",
     "ContentImage",
+    "ContentReasoning",
     "ContentText",
     "ContentVideo",
+    "ContentDocument",
+    "ContentDocument",
     "Content",
     "ChatMessage",
     "ChatMessageBase",
@@ -61,7 +89,11 @@ __all__ = [
     "ChatMessageAssistant",
     "ChatMessageTool",
     "ChatCompletionChoice",
+    "messages_from_openai",
+    "messages_to_openai",
+    "ModelCall",
     "ModelOutput",
+    "ModelConversation",
     "Logprobs",
     "Logprob",
     "TopLogprob",
@@ -71,6 +103,10 @@ __all__ = [
     "ModelUsage",
     "StopReason",
     "call_tools",
+    "execute_tools",
+    "ExecuteToolsResult",
+    "trim_messages",
+    "user_prompt",
     "cache_clear",
     "cache_list_expired",
     "cache_path",
@@ -78,6 +114,11 @@ __all__ = [
     "cache_size",
     "get_model",
     "modelapi",
+    "Citation",
+    "CitationBase",
+    "DocumentCitation",
+    "ContentCitation",
+    "UrlCitation",
 ]
 
 _TOOL_MODULE_VERSION = "0.3.18"

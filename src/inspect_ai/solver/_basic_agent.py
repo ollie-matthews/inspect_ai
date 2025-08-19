@@ -5,16 +5,16 @@ from typing_extensions import TypedDict, Unpack
 
 from inspect_ai._util._async import is_callable_coroutine
 from inspect_ai.model._cache import CachePolicy
-from inspect_ai.model._call_tools import call_tools
-from inspect_ai.model._chat_message import ChatMessageTool, ChatMessageUser
+from inspect_ai.model._call_tools import execute_tools
+from inspect_ai.model._chat_message import ChatMessage, ChatMessageTool, ChatMessageUser
 from inspect_ai.model._model import get_model
 from inspect_ai.scorer._metric import Score, ValueToFloat, value_to_float
 from inspect_ai.scorer._score import score
 from inspect_ai.solver._chain import chain
 from inspect_ai.tool._tool import Tool, ToolResult, tool
 from inspect_ai.tool._tool_with import tool_with
+from inspect_ai.util._limit import token_limit as create_token_limit
 
-from ._limit import SampleLimitExceededError
 from ._prompt import system_message
 from ._solver import Generate, Solver, solver
 from ._task_state import TaskState
@@ -24,7 +24,7 @@ logger = getLogger(__name__)
 
 DEFAULT_SYSTEM_MESSAGE = """
 You are a helpful assistant attempting to submit the correct answer. You have
-several functions available to help with finding the answer. Each message may
+several functions available to help with finding the answer. Each message
 may perform one function call. You will see the result of the function right
 after sending the message. If you need to perform multiple actions, you can
 always send more messages with subsequent function calls. Do some reasoning
@@ -65,6 +65,7 @@ def basic_agent(
     continue_message: str = DEFAULT_CONTINUE_MESSAGE,
     submit_name: str = DEFAULT_SUBMIT_NAME,
     submit_description: str = DEFAULT_SUBMIT_DESCRIPTION,
+    submit_append: bool = False,
     **kwargs: Unpack[BasicAgentDeprecatedArgs],
 ) -> Solver:
     """Basic ReAct agent.
@@ -88,7 +89,7 @@ def basic_agent(
        max_attempts: Maximum number of submissions to accept before terminating.
        message_limit: Limit on messages in sample before terminating agent.
           If not specified, will use limit_messages defined for the task. If there is none
-          defined for the task, 50 will be used as a default.
+          defined for the task and there is no `token_limit`, 50 will be used as a default.
        token_limit: Limit on tokens used in sample before terminating agent.
        max_tool_output: Maximum output length (in bytes).
           Defaults to max_tool_output from active GenerateConfig.
@@ -102,6 +103,9 @@ def basic_agent(
           (defaults to 'submit')
        submit_description: Description of submit tool (defaults to
           'Submit an answer for evaluation')
+       submit_append: Append the submit tool output to the model completion
+           text (defaults to `False`, which means the submission overwrites
+           the model completion).
        **kwargs: Deprecated arguments for backward compatibility.
 
     Returns:
@@ -149,9 +153,14 @@ def basic_agent(
         return solve
 
     # helper to extract a submitted answer
-    def submission(tool_results: list[ChatMessageTool]) -> str | None:
+    def submission(tool_results: list[ChatMessage]) -> str | None:
         return next(
-            (result.text for result in tool_results if result.function == submit_name),
+            (
+                result.text
+                for result in tool_results
+                if isinstance(result, ChatMessageTool)
+                and result.function == submit_name
+            ),
             None,
         )
 
@@ -159,18 +168,19 @@ def basic_agent(
     @solver
     def basic_agent_loop() -> Solver:
         async def solve(state: TaskState, generate: Generate) -> TaskState:
-            # resolve message_limit -- prefer parameter then fall back to task
-            # (if there is no message_limit then default to 50)
-            state.message_limit = message_limit or state.message_limit or 50
-
-            # resolve token limit
-            state.token_limit = token_limit or state.token_limit
+            # resolve message_limit -- prefer parameter then fall back to task.
+            # if there is no message limit AND no token limit then provide
+            # a default message limit of 50 (so that the task can't run forever
+            # if the model never submits)
+            state.message_limit = message_limit or state.message_limit
+            if state.message_limit is None and token_limit is None:
+                state.message_limit = 50
 
             # track attempts
             attempts = 0
 
-            try:
-                # main loop (state.completed checks message_limit and token_limit)
+            with create_token_limit(token_limit):
+                # main loop
                 while not state.completed:
                     # generate output and append assistant message
                     state.output = await get_model().generate(
@@ -189,9 +199,9 @@ def basic_agent(
 
                     # resolve tools calls (if any)
                     if state.output.message.tool_calls:
-                        # call tool functions
-                        tool_results = await call_tools(
-                            state.output.message,
+                        # execute tool functions
+                        tool_results, _ = await execute_tools(
+                            [state.output.message],
                             state.tools,
                             max_output=max_tool_output,
                         )
@@ -200,19 +210,21 @@ def basic_agent(
                         # was an answer submitted?
                         answer = submission(tool_results)
                         if answer:
-                            # set the output to the answer for scoring
-                            state.output.completion = answer
+                            if submit_append:
+                                state.output.completion = (
+                                    f"{state.output.completion}\n\n{answer}".strip()
+                                )
+                            else:
+                                state.output.completion = answer
 
                             # exit if we are at max_attempts
                             attempts += 1
                             if attempts >= max_attempts:
-                                state.completed = True
                                 break
 
                             # exit if the submission is successful
                             answer_scores = await score(state)
                             if score_value_fn(answer_scores[0].value) == 1.0:
-                                state.completed = True
                                 break
 
                             # otherwise notify the model that it was incorrect and continue
@@ -235,10 +247,6 @@ def basic_agent(
                     # no tool calls, urge the model to continue
                     else:
                         state.messages.append(ChatMessageUser(content=continue_message))
-
-            # propagate current state along with sample limit exceeded
-            except SampleLimitExceededError as ex:
-                raise ex.with_state(state)
 
             return state
 

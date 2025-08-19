@@ -1,3 +1,4 @@
+import sys
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
@@ -105,9 +106,9 @@ def parse_attribute_docs(attrib: Attribute, options: DocParseOptions) -> DocObje
 
 
 def parse_class_docs(clz: Class, options: DocParseOptions) -> DocObject:
-    # if this is a protocol then ammend the declaration w/ the __call__
+    # if this is a protocol then amend the declaration w/ the __call__
     is_protocol = clz.bases and str(clz.bases[0]) == "Protocol"
-    if is_protocol:
+    if is_protocol and "__call__" in clz.members:
         # read from call (substituting the protocol name)
         call = cast(Function, clz.members["__call__"])
         call_docs = parse_function_docs(call, options)
@@ -268,6 +269,7 @@ def read_source(
     object: Object, options: DocParseOptions
 ) -> tuple[str, str, list[DocstringSection]]:
     # assert preconditions
+    sys.stderr.write(object.name + "\n")
     assert isinstance(object.filepath, Path)
     assert object.lineno is not None
     assert object.docstring is not None

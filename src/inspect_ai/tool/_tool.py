@@ -12,6 +12,7 @@ from typing import (
 )
 
 from inspect_ai._util.content import (
+    Content,
     ContentAudio,
     ContentImage,
     ContentText,
@@ -19,6 +20,7 @@ from inspect_ai._util.content import (
 )
 from inspect_ai._util.registry import (
     RegistryInfo,
+    is_registry_object,
     registry_add,
     registry_name,
     registry_tag,
@@ -98,6 +100,19 @@ class Tool(Protocol):
 
               return execute
           ```
+        """
+        ...
+
+
+@runtime_checkable
+class ToolSource(Protocol):
+    """Protocol for dynamically providing a set of tools."""
+
+    async def tools(self) -> list[Tool]:
+        """Retrieve tools from tool source.
+
+        Returns:
+            List of tools
         """
         ...
 
@@ -198,7 +213,27 @@ def tool(
         # wrap instantiations of scorer so they carry registry info and metrics
         @wraps(tool_type)
         def tool_wrapper(*args: P.args, **kwargs: P.kwargs) -> Tool:
+            # create the tool
             tool = tool_type(*args, **kwargs)
+
+            # this might already have registry info, in that case
+            # capture it and use it as defaults
+            from inspect_ai.tool._tool_def import tool_registry_info
+
+            tool_parallel = parallel
+            tool_viewer = viewer
+            tool_model_input = model_input
+            tool_options: dict[str, object] | None = None
+            if is_registry_object(tool):
+                _, _, reg_parallel, reg_viewer, reg_model_input, options = (
+                    tool_registry_info(tool)
+                )
+                tool_parallel = parallel and reg_parallel
+                tool_viewer = viewer or reg_viewer
+                tool_model_input = model_input or reg_model_input
+                tool_options = options
+
+            # tag the object
             registry_tag(
                 tool_type,
                 tool,
@@ -207,11 +242,13 @@ def tool(
                     name=tool_name,
                     metadata={
                         TOOL_PROMPT: prompt,
-                        TOOL_PARALLEL: parallel,
-                        TOOL_VIEWER: viewer,
+                        TOOL_PARALLEL: tool_parallel,
+                        TOOL_VIEWER: tool_viewer,
                         TOOL_MODEL_INPUT: (
-                            model_input or getattr(tool, TOOL_INIT_MODEL_INPUT, None)
+                            tool_model_input
+                            or getattr(tool, TOOL_INIT_MODEL_INPUT, None)
                         ),
+                        TOOL_OPTIONS: tool_options,
                     },
                 ),
                 *args,
@@ -228,10 +265,24 @@ def tool(
         return create_tool_wrapper
 
 
+def tool_result_content(
+    content: str | list[Content],
+) -> str | list[ContentText | ContentImage | ContentAudio | ContentVideo]:
+    if isinstance(content, str):
+        return content
+    else:
+        return [
+            c
+            for c in content
+            if isinstance(c, ContentText | ContentImage | ContentAudio | ContentVideo)
+        ]
+
+
 TOOL_PROMPT = "prompt"
 TOOL_PARALLEL = "parallel"
 TOOL_VIEWER = "viewer"
 TOOL_MODEL_INPUT = "model_input"
+TOOL_OPTIONS = "options"
 
 
 TOOL_INIT_MODEL_INPUT = "__TOOL_INIT_MODEL_INPUT__"

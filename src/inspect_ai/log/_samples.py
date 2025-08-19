@@ -1,16 +1,17 @@
-import asyncio
 import contextlib
 from contextvars import ContextVar
 from datetime import datetime
-from typing import AsyncGenerator, Literal
+from typing import AsyncGenerator, Iterator, Literal
 
+from anyio.abc import TaskGroup
 from shortuuid import uuid
 
 from inspect_ai.dataset._dataset import Sample
+from inspect_ai.util._limit import LimitExceededError
 from inspect_ai.util._sandbox import SandboxConnection
 from inspect_ai.util._sandbox.context import sandbox_connections
 
-from ._transcript import Transcript
+from ._transcript import ModelEvent, Transcript
 
 
 class ActiveSample:
@@ -18,36 +19,48 @@ class ActiveSample:
         self,
         *,
         task: str,
+        log_location: str,
         model: str,
         sample: Sample,
         epoch: int,
         message_limit: int | None,
         token_limit: int | None,
         time_limit: int | None,
+        working_limit: int | None,
         fails_on_error: bool,
         transcript: Transcript,
         sandboxes: dict[str, SandboxConnection],
     ) -> None:
         self.id = uuid()
         self.started: float | None = None
+        self.tg: TaskGroup | None = None
         self.completed: float | None = None
         self.task = task
+        self.log_location = log_location
         self.model = model
         self.sample = sample
         self.epoch = epoch
         self.message_limit = message_limit
         self.token_limit = token_limit
         self.time_limit = time_limit
+        self.working_limit = working_limit
         self.fails_on_error = fails_on_error
         self.total_messages = 0
         self.total_tokens = 0
         self.transcript = transcript
         self.sandboxes = sandboxes
-        self._sample_task = asyncio.current_task()
         self._interrupt_action: Literal["score", "error"] | None = None
+        self._limit_exceeded_error: LimitExceededError | None = None
+
+    def start(self, tg: TaskGroup) -> None:
+        self.started = datetime.now().timestamp()
+        self.tg = tg
+
+    def complete(self) -> None:
+        self.completed = datetime.now().timestamp()
 
     @property
-    def execution_time(self) -> float:
+    def running_time(self) -> float:
         if self.started is not None:
             completed = (
                 self.completed
@@ -60,12 +73,27 @@ class ActiveSample:
 
     def interrupt(self, action: Literal["score", "error"]) -> None:
         self._interrupt_action = action
-        assert self._sample_task
-        self._sample_task.cancel()
+        if self.tg is None:
+            raise RuntimeError(
+                "Attempted to interrupt sample without enclosing task group."
+            )
+        self.tg.cancel_scope.cancel()
+
+    def limit_exceeded(self, error: LimitExceededError) -> None:
+        self._limit_exceeded_error = error
+        if self.tg is None:
+            raise RuntimeError(
+                "Attempted to interrupt sample for limit without enclosing task group."
+            )
+        self.tg.cancel_scope.cancel()
 
     @property
     def interrupt_action(self) -> Literal["score", "error"] | None:
         return self._interrupt_action
+
+    @property
+    def limit_exceeded_error(self) -> LimitExceededError | None:
+        return self._limit_exceeded_error
 
 
 def init_active_samples() -> None:
@@ -76,24 +104,28 @@ def init_active_samples() -> None:
 async def active_sample(
     *,
     task: str,
+    log_location: str,
     model: str,
     sample: Sample,
     epoch: int,
     message_limit: int | None,
     token_limit: int | None,
     time_limit: int | None,
+    working_limit: int | None,
     fails_on_error: bool,
     transcript: Transcript,
 ) -> AsyncGenerator[ActiveSample, None]:
     # create the sample
     active = ActiveSample(
         task=task,
+        log_location=log_location,
         model=model,
         sample=sample,
         epoch=epoch,
         message_limit=message_limit,
         token_limit=token_limit,
         time_limit=time_limit,
+        working_limit=working_limit,
         sandboxes=await sandbox_connections(),
         fails_on_error=fails_on_error,
         transcript=transcript,
@@ -104,21 +136,13 @@ async def active_sample(
     try:
         yield active
     finally:
-        active.completed = datetime.now().timestamp()
+        active.complete()
         _active_samples.remove(active)
         _sample_active.set(None)
 
 
 def sample_active() -> ActiveSample | None:
     return _sample_active.get(None)
-
-
-def active_sample_token_limit() -> int | None:
-    active = sample_active()
-    if active:
-        return active.token_limit
-    else:
-        return None
 
 
 def set_active_sample_token_limit(token_limit: int | None) -> None:
@@ -151,6 +175,28 @@ def set_active_sample_total_messages(total_messages: int) -> None:
     active = sample_active()
     if active:
         active.total_messages = total_messages
+
+
+_active_model_event: ContextVar[ModelEvent | None] = ContextVar(
+    "_active_model_event", default=None
+)
+
+
+@contextlib.contextmanager
+def track_active_model_event(event: ModelEvent) -> Iterator[None]:
+    token = _active_model_event.set(event)
+    try:
+        yield
+    finally:
+        _active_model_event.reset(token)
+
+
+def report_active_sample_retry() -> None:
+    model_event = _active_model_event.get()
+    if model_event is not None:
+        if model_event.retries is None:
+            model_event.retries = 0
+        model_event.retries = model_event.retries + 1
 
 
 _sample_active: ContextVar[ActiveSample | None] = ContextVar(

@@ -1,16 +1,25 @@
-import asyncio
+import functools
 
+from inspect_ai._util._async import tg_collect
 from inspect_ai._util.constants import BASE_64_DATA_REMOVED
-from inspect_ai._util.content import Content, ContentAudio, ContentImage, ContentVideo
+from inspect_ai._util.content import (
+    Content,
+    ContentAudio,
+    ContentDocument,
+    ContentImage,
+    ContentVideo,
+)
 from inspect_ai._util.images import file_as_data_uri
 from inspect_ai._util.url import is_data_uri
 from inspect_ai.dataset import Sample
-from inspect_ai.model import ChatMessage, ChatMessageUser
+from inspect_ai.model import ChatMessage
 from inspect_ai.solver import TaskState
 
 
 async def states_with_base64_content(states: list[TaskState]) -> list[TaskState]:
-    return await asyncio.gather(*[state_with_base64_content(state) for state in states])
+    return await tg_collect(
+        [functools.partial(state_with_base64_content, state) for state in states]
+    )
 
 
 async def state_with_base64_content(state: TaskState) -> TaskState:
@@ -24,8 +33,8 @@ def state_without_base64_content(state: TaskState) -> TaskState:
 
 
 async def samples_with_base64_content(samples: list[Sample]) -> list[Sample]:
-    return await asyncio.gather(
-        *[sample_with_base64_content(sample) for sample in samples]
+    return await tg_collect(
+        [functools.partial(sample_with_base64_content, sample) for sample in samples]
     )
 
 
@@ -50,8 +59,11 @@ def sample_without_base64_content(sample: Sample) -> Sample:
 async def messages_with_base64_content(
     messages: list[ChatMessage],
 ) -> list[ChatMessage]:
-    return await asyncio.gather(
-        *[message_with_base64_content(message) for message in messages]
+    return await tg_collect(
+        [
+            functools.partial(message_with_base64_content, message)
+            for message in messages
+        ]
     )
 
 
@@ -60,27 +72,31 @@ def messages_without_base64_content(messages: list[ChatMessage]) -> list[ChatMes
 
 
 async def message_with_base64_content(message: ChatMessage) -> ChatMessage:
-    if isinstance(message, ChatMessageUser) and not isinstance(message.content, str):
-        return ChatMessageUser(
-            content=[
-                await chat_content_with_base64_content(content)
-                for content in message.content
-            ],
-            source=message.source,
+    if not isinstance(message.content, str):
+        return message.model_copy(
+            update=dict(
+                content=[
+                    await chat_content_with_base64_content(content)
+                    for content in message.content
+                ]
+            )
         )
+
     else:
         return message
 
 
 def message_without_base64_content(message: ChatMessage) -> ChatMessage:
-    if isinstance(message, ChatMessageUser) and not isinstance(message.content, str):
-        return ChatMessageUser(
-            content=[
-                chat_content_without_base64_content(content)
-                for content in message.content
-            ],
-            source=message.source,
+    if not isinstance(message.content, str):
+        return message.model_copy(
+            update=dict(
+                content=[
+                    chat_content_without_base64_content(content)
+                    for content in message.content
+                ]
+            )
         )
+
     else:
         return message
 
@@ -99,6 +115,11 @@ async def chat_content_with_base64_content(content: Content) -> Content:
         return ContentVideo(
             video=await file_as_data_uri(content.video), format=content.format
         )
+    elif isinstance(content, ContentDocument):
+        document = await file_as_data_uri(content.document)
+        return ContentDocument(
+            document=document, filename=content.filename, mime_type=content.mime_type
+        )
     else:
         return content
 
@@ -110,5 +131,11 @@ def chat_content_without_base64_content(content: Content) -> Content:
         return ContentAudio(audio=BASE_64_DATA_REMOVED, format="mp3")
     elif isinstance(content, ContentVideo) and is_data_uri(content.video):
         return ContentVideo(video=BASE_64_DATA_REMOVED, format="mp4")
+    elif isinstance(content, ContentDocument) and is_data_uri(content.document):
+        return ContentDocument(
+            document=BASE_64_DATA_REMOVED,
+            filename=content.filename,
+            mime_type=content.mime_type,
+        )
     else:
         return content

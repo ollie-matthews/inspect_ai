@@ -1,34 +1,28 @@
 ## AutoGen Agent
 
-This example demonstrates using a native [AutoGen](https://microsoft.github.io/autogen/) agent with Insepct to perform web research using the using the AutoGen [MultiModalWebSurfer](https://microsoft.github.io/autogen/stable//reference/python/autogen_ext.agents.web_surfer.html#autogen_ext.agents.web_surfer.MultimodalWebSurfer). The example uses the new [`bridge()`](https://github.com/UKGovernmentBEIS/inspect_ai/pull/1181) solver which enables integrating arbitrary 3rd party agent frameworks into Inspect.
+This example demonstrates using a native [AutoGen](https://microsoft.github.io/autogen/) agent with Inspect to perform web research using the using the AutoGen [MultiModalWebSurfer](https://microsoft.github.io/autogen/stable//reference/python/autogen_ext.agents.web_surfer.html#autogen_ext.agents.web_surfer.MultimodalWebSurfer). The example uses the Inspect [`agent_bridge()`](https://inspect.aisi.org.uk/agent-bridge.html) agent which enables integrating arbitrary 3rd party agent frameworks into Inspect.
 
 The example includes the following source files:
 
-| File            | Description                                                                            |
-|------------------|------------------------------------------------------|
-| [agent.py](agent.py)      | AutoGen agent (this file has no dependencies on Insepct, it is pure AutoGen). |
-| [task.py](task.py)       | Evaluation task which uses `bridge()` to use the AutoGen agent as a solver.          |
-| [dataset.json](dataset.json) | Dataset with questions and ideal answers.                                              |
+| File | Description |
+|-------------------|-----------------------------------------------------|
+| [agent.py](agent.py) | AutoGen agent which uses `agent_bridge()`. |
+| [task.py](task.py) | Evaluation task which uses the AutoGen agent. |
+| [dataset.json](dataset.json) | Dataset with questions and ideal answers. |
+| [requirements.txt](requirements.txt) | Dependencies for AutoGen example. |
 
+To run the example, install the required dependencies then install Playwright:
 
-To run the example, install the following Python packages then install Playwright:
-
-```bash
-pip install -U playwright autogen-agentchat "autogen-ext[openai,web-surfer]"
+``` bash
+cd examples/bridge/autogen
+pip install -r requirements.txt
 playwright install
 ```
 
 Now you should be able to run the example as follows against various models:
 
 ``` bash
-inspect eval examples/bridge/autogen --model openai/gpt-4 
-inspect eval examples/bridge/autogen --model anthropic/claude-3-haiku-20240307
-inspect eval examples/bridge/autogen --model google/gemini-1.5-pro
+inspect eval task.py --model openai/gpt-4o
+inspect eval task.py --model anthropic/claude-3-7-sonnet-latest
+inspect eval task.py --model google/gemini-2.5-pro
 ```
-
-
-
-
-
-
-

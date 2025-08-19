@@ -8,6 +8,7 @@ from inspect_ai.log._log import (
     EvalResults,
     EvalSample,
     EvalSampleReductions,
+    EvalSampleSummary,
     EvalSpec,
     EvalStats,
 )
@@ -40,11 +41,12 @@ class Recorder(abc.ABC):
     async def log_finish(
         self,
         eval: EvalSpec,
-        status: Literal["success", "cancelled", "error"],
+        status: Literal["started", "success", "cancelled", "error"],
         stats: EvalStats,
         results: EvalResults | None,
         reductions: list[EvalSampleReductions] | None,
         error: EvalError | None = None,
+        header_only: bool = False,
     ) -> EvalLog: ...
 
     @classmethod
@@ -54,9 +56,21 @@ class Recorder(abc.ABC):
     @classmethod
     @abc.abstractmethod
     async def read_log_sample(
-        cls, location: str, id: str | int, epoch: int = 1
+        cls,
+        location: str,
+        id: str | int | None = None,
+        epoch: int = 1,
+        uuid: str | None = None,
     ) -> EvalSample: ...
 
     @classmethod
     @abc.abstractmethod
-    async def write_log(cls, location: str, log: EvalLog) -> None: ...
+    async def read_log_sample_summaries(
+        cls, location: str
+    ) -> list[EvalSampleSummary]: ...
+
+    @classmethod
+    @abc.abstractmethod
+    async def write_log(
+        cls, location: str, log: EvalLog, if_match_etag: str | None = None
+    ) -> None: ...

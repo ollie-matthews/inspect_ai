@@ -2,6 +2,7 @@ import os
 import tempfile
 
 import pytest
+from test_helpers.utils import skip_if_trio
 
 from inspect_ai import Task, eval
 from inspect_ai._util.file import filesystem
@@ -11,6 +12,7 @@ from inspect_ai.scorer import match
 
 
 @pytest.mark.slow
+@skip_if_trio
 def test_s3_bundle(mock_s3) -> None:
     # run an eval to generate a log file to this directory
     s3_fs = filesystem("s3://test-bucket/")
@@ -38,7 +40,7 @@ def test_s3_bundle(mock_s3) -> None:
         "assets/index.js",
         "assets/index.css",
         "logs",
-        "logs/logs.json",
+        "logs/listing.json",
     ]
 
     for exp in expected:
@@ -72,13 +74,13 @@ def test_bundle() -> None:
             "assets/index.js",
             "assets/index.css",
             "logs",
-            "logs/logs.json",
+            "logs/listing.json",
         ]
         for exp in expected:
             abs = os.path.join(output_dir, exp)
             assert os.path.exists(abs)
 
-        # ensure there is a non-logs.json log file present in logs
+        # ensure there is a non-listing.json log file present in logs
         non_manifest_logs = [
             f
             for f in os.listdir(os.path.join(output_dir, "logs"))

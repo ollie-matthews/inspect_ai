@@ -63,11 +63,28 @@ inspect trace anomalies --all
 
 Note that errors and timeouts are not by themselves evidence of problems, since both occur in the normal course of running evaluations (e.g. model generate calls can return errors that are retried and Docker or S3 can also return retryable errors or timeout when they are under heavy load).
 
-As with the `inspect trace dump` command, you can apply a filter when listing anomolies. For example:
+As with the `inspect trace dump` command, you can apply a filter when listing anomalies. For example:
 
 ```bash
 inspect trace anomalies --filter model
 ```
+
+## HTTP Requests
+
+You can view all of the HTTP requests for the current (or most recent) evaluation run using the `inspect trace http` command. For example:
+
+``` bash
+inspect trace http           # show all http requests
+inspect trace http --failed  # show only failed requests
+```
+
+The `--filter` parameter also works here, for example:
+
+```bash
+inspect trace http --failed --filter bedrock
+```
+
+
 
 ## Tracing API {#tracing-api}
 

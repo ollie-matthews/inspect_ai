@@ -40,7 +40,7 @@ async def generate_o1(
     **params: Any,
 ) -> ModelOutput | tuple[ModelOutput | Exception, ModelCall]:
     # create chatapi handler
-    handler = O1PreviewChatAPIHandler()
+    handler = O1PreviewChatAPIHandler(model)
 
     # call model
     request = dict(
@@ -69,6 +69,16 @@ async def generate_o1(
         usage=ModelUsage(
             input_tokens=completion.usage.prompt_tokens,
             output_tokens=completion.usage.completion_tokens,
+            input_tokens_cache_read=(
+                completion.usage.prompt_tokens_details.cached_tokens
+                if completion.usage.prompt_tokens_details is not None
+                else None  # openai only have cache read stats/pricing.
+            ),
+            reasoning_tokens=(
+                completion.usage.completion_tokens_details.reasoning_tokens
+                if completion.usage.completion_tokens_details is not None
+                else None
+            ),
             total_tokens=completion.usage.total_tokens,
         )
         if completion.usage
@@ -97,7 +107,7 @@ def chat_messages(
 ) -> list[ChatCompletionMessageParam]:
     # o1 does not allow system messages so convert system -> user
     messages: list[ChatMessage] = [
-        ChatMessageUser(content=message.content)
+        ChatMessageUser(id=message.id, content=message.content)
         if message.role == "system"
         else message
         for message in input
@@ -145,6 +155,9 @@ TOOL_CALL = "tool_call"
 
 
 class O1PreviewChatAPIHandler(ChatAPIHandler):
+    def __init__(self, model: str) -> None:
+        self.model = model
+
     @override
     def input_with_tools(
         self, input: list[ChatMessage], tools: list[ToolInfo]
@@ -198,8 +211,15 @@ class O1PreviewChatAPIHandler(ChatAPIHandler):
         This method has an interdependency with `input_with_tools()` (as that is the
         prompt that asks the model to use the <tool_call>...</tool_call> syntax)
         """
+        # define regex patterns
+        # NOTE: If you change either of these regex patterns, please update the other
+        # tool_call_regex extracts the JSON content (in curly braces) between tool call tags
+        tool_call_regex = rf"<{TOOL_CALL}>\s*(\{{[\s\S]*?\}})\s*</{TOOL_CALL}>"
+        # tool_call_content_regex matches the entire tool call block including tags for extracting
+        # the content outside of the tool call tags
+        tool_call_content_regex = rf"<{TOOL_CALL}>\s*\{{[\s\S]*?\}}\s*</{TOOL_CALL}>"
+
         # extract tool calls
-        tool_call_regex = rf"<{TOOL_CALL}>((?:.|\n)*?)</{TOOL_CALL}>"
         tool_calls_content: list[str] = re.findall(tool_call_regex, response)
 
         # if there are tool calls proceed with parsing
@@ -213,7 +233,6 @@ class O1PreviewChatAPIHandler(ChatAPIHandler):
             ]
 
             # find other content that exists outside tool calls
-            tool_call_content_regex = rf"<{TOOL_CALL}>(?:.|\n)*?</{TOOL_CALL}>"
             other_content = re.split(tool_call_content_regex, response, flags=re.DOTALL)
             other_content = [
                 str(content).strip()
@@ -224,12 +243,17 @@ class O1PreviewChatAPIHandler(ChatAPIHandler):
 
             # return the message
             return ChatMessageAssistant(
-                content=content, tool_calls=tool_calls, source="generate"
+                content=content,
+                tool_calls=tool_calls,
+                model=self.model,
+                source="generate",
             )
 
         # otherwise this is just an ordinary assistant message
         else:
-            return ChatMessageAssistant(content=response, source="generate")
+            return ChatMessageAssistant(
+                content=response, model=self.model, source="generate"
+            )
 
     @override
     def assistant_message(self, message: ChatMessageAssistant) -> ChatAPIMessage:
@@ -318,6 +342,5 @@ def parse_tool_call_content(content: str, tools: list[ToolInfo]) -> ToolCall:
             id="unknown",
             function="unknown",
             arguments={},
-            type="function",
             parse_error=parse_error,
         )

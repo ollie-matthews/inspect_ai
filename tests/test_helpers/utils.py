@@ -1,5 +1,5 @@
-import asyncio
 import contextlib
+import functools
 import importlib.util
 import os
 import signal
@@ -8,15 +8,59 @@ import sys
 from pathlib import Path
 from random import random
 from types import FrameType
-from typing import Generator, Sequence
+from typing import Callable, Generator, Sequence, TypeVar
 
+import anyio
 import pytest
 
 from inspect_ai import Task, eval, task
+from inspect_ai._util._async import configured_async_backend
 from inspect_ai.dataset import Sample
 from inspect_ai.model import ChatMessage, ModelName, ModelOutput
 from inspect_ai.scorer import match
 from inspect_ai.solver import Generate, TaskState, generate, solver
+
+F = TypeVar("F", bound=Callable)
+
+
+def flaky_retry(max_retries: int) -> Callable[[F], F]:
+    """
+    Decorator to retry flaky tests up to max_retries times.
+
+    **Use with discretion and as a last resort.** This decorator should only be used
+    for tests that require specific model behavior to trigger the code under test,
+    where the flakiness is due to inherent non-determinism in model responses
+    rather than bugs in our code.
+
+    Before using this decorator, consider:
+    - Can the test be made more deterministic?
+    - Is the flakiness due to a bug that should be fixed?
+    - Can more lenient assertions be used?
+
+    Args:
+        max_retries: Maximum number of retry attempts
+
+    Returns:
+        Decorated test function that retries on failure
+    """
+
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries + 1):  # +1 for initial attempt
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries:
+                        continue
+                    else:
+                        raise last_exception
+
+        return wrapper  # type: ignore
+
+    return decorator
 
 
 def skip_if_env_var(var: str, exists=True):
@@ -48,6 +92,18 @@ def skip_if_no_package(package):
     )
 
 
+def skip_if_no_mcp_package(func):
+    return skip_if_no_package("mcp")(func)
+
+
+def skip_if_no_mcp_fetch_package(func):
+    return skip_if_no_package("mcp_server_fetch")(func)
+
+
+def skip_if_no_mcp_git_package(func):
+    return skip_if_no_package("mcp_server_git")(func)
+
+
 def skip_if_no_vllm(func):
     return skip_if_no_package("vllm")(func)
 
@@ -60,6 +116,10 @@ def skip_if_no_accelerate(func):
     return skip_if_no_package("accelerate")(func)
 
 
+def skip_if_no_transformer_lens(func):
+    return skip_if_no_package("transformer_lens")(func)
+
+
 def skip_if_no_openai(func):
     return pytest.mark.api(
         pytest.mark.skipif(
@@ -70,8 +130,23 @@ def skip_if_no_openai(func):
     )
 
 
+def skip_if_no_openai_azure(func):
+    return pytest.mark.skipif(
+        importlib.util.find_spec("openai") is None
+        or os.environ.get("AZUREAI_OPENAI_API_KEY") is None
+        or os.environ.get("AZUREAI_OPENAI_BASE_URL") is None,
+        reason="Test requires both OpenAI package and AZUREAI_OPENAI_API_KEY and AZUREAI_OPENAI_BASE_URL environment variables",
+    )(func)
+
+
 def skip_if_no_openai_package(func):
     return skip_if_no_package("openai")(func)
+
+
+def skip_if_no_openai_reasoning_summaries(func):
+    return pytest.mark.api(
+        skip_if_env_var("ENABLE_OPENAI_REASONING_SUMMARIES", exists=False)(func)
+    )
 
 
 def skip_if_no_anthropic(func):
@@ -86,16 +161,55 @@ def skip_if_no_mistral(func):
     return pytest.mark.api(skip_if_env_var("MISTRAL_API_KEY", exists=False)(func))
 
 
+def skip_if_no_mistral_package(func):
+    return skip_if_no_package("mistralai")(func)
+
+
 def skip_if_no_grok(func):
     return pytest.mark.api(skip_if_env_var("GROK_API_KEY", exists=False)(func))
 
 
 def skip_if_no_cloudflare(func):
-    return pytest.mark.api(skip_if_env_var("CLOUDFLARE_API_TOKEN", exists=False)(func))
+    return pytest.mark.api(skip_if_env_var("CLOUDFLARE_API_KEY", exists=False)(func))
 
 
 def skip_if_no_together(func):
     return pytest.mark.api(skip_if_env_var("TOGETHER_API_KEY", exists=False)(func))
+
+
+def skip_if_no_openrouter(func):
+    return pytest.mark.api(skip_if_env_var("OPENROUTER_API_KEY", exists=False)(func))
+
+
+def skip_if_no_together_base_url(func):
+    return pytest.mark.api(skip_if_env_var("TOGETHER_BASE_URL", exists=False)(func))
+
+
+def skip_if_no_fireworks(func):
+    return pytest.mark.api(skip_if_env_var("FIREWORKS_API_KEY", exists=False)(func))
+
+
+def skip_if_no_sambanova(func):
+    return pytest.mark.api(skip_if_env_var("SAMBANOVA_API_KEY", exists=False)(func))
+
+
+def skip_if_no_perplexity(func):
+    missing_requirements = []
+    if importlib.util.find_spec("openai") is None:
+        missing_requirements.append("openai package")
+    if os.environ.get("PERPLEXITY_API_KEY") is None:
+        missing_requirements.append("PERPLEXITY_API_KEY environment variable")
+
+    return pytest.mark.api(
+        pytest.mark.skipif(
+            len(missing_requirements) > 0,
+            reason=f"Test requires: {', '.join(missing_requirements)}",
+        )(func)
+    )
+
+
+def skip_if_no_perplexity_package(func):
+    return skip_if_no_package("openai")(func)
 
 
 def skip_if_no_azureai(func):
@@ -108,8 +222,8 @@ def skip_if_no_llama_cpp_python(func):
     )
 
 
-def skip_if_no_vertex(func):
-    return pytest.mark.api(skip_if_env_var("ENABLE_VERTEX_TESTS", exists=False)(func))
+def skip_if_no_bedrock(func):
+    return pytest.mark.api(skip_if_env_var("ENABLE_BEDROCK_TESTS", exists=False)(func))
 
 
 def skip_if_github_action(func):
@@ -133,6 +247,21 @@ def skip_if_no_docker(func):
     return pytest.mark.skipif(
         not is_docker_installed, reason="Test doesn't work without Docker installed."
     )(func)
+
+
+def skip_if_async_backend(backend):
+    return pytest.mark.skipif(
+        configured_async_backend() == backend,
+        reason=f"Test not compatible with {backend} async backend.",
+    )
+
+
+def skip_if_trio(func):
+    return skip_if_async_backend("trio")(func)
+
+
+def skip_if_asyncio(func):
+    return skip_if_async_backend("asyncio")(func)
 
 
 def run_example(example: str, model: str):
@@ -164,7 +293,7 @@ def simple_task_state(
 def file_check(file: str):
     async def solve(state: TaskState, generate: Generate):
         if not Path(file).exists():
-            raise ValueError(f"File {file} does not exist.")
+            raise FileNotFoundError(f"File {file} does not exist.")
 
         return state
 
@@ -223,7 +352,15 @@ def failing_task_deterministic(should_fail: Sequence[bool]) -> Task:
 @solver
 def sleep_for_solver(seconds: int):
     async def solve(state: TaskState, generate: Generate):
-        await asyncio.sleep(seconds)
+        await anyio.sleep(seconds)
+        return state
+
+    return solve
+
+
+@solver
+def identity_solver():
+    async def solve(state: TaskState, generate: Generate):
         return state
 
     return solve

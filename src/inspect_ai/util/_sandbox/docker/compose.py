@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from inspect_ai._util.error import PrerequisiteError
 from inspect_ai._util.trace import trace_message
-from inspect_ai.util._display import display_type
+from inspect_ai.util._concurrency import concurrency
+from inspect_ai.util._display import display_type, display_type_plain
 from inspect_ai.util._subprocess import ExecResult, subprocess
 
 from .prereqs import (
@@ -28,7 +29,7 @@ COMPOSE_WAIT = 120
 
 async def compose_up(
     project: ComposeProject, services: dict[str, ComposeService]
-) -> None:
+) -> ExecResult[str]:
     # compute the maximum amount of time we will
     up_command = ["up", "--detach", "--wait"]
 
@@ -49,7 +50,8 @@ async def compose_up(
     # passing the --wait flag (see https://github.com/docker/compose/issues/10596).
     # In practice, we will catch any errors when calling compose_check_running()
     # immediately after we call compose_up().
-    await compose_command(up_command, project=project, timeout=timeout)
+    result = await compose_command(up_command, project=project, timeout=timeout)
+    return result
 
 
 async def compose_down(project: ComposeProject, quiet: bool = True) -> None:
@@ -95,7 +97,7 @@ async def compose_cp(
     output_limit: int | None = None,
 ) -> None:
     result = await compose_command(
-        ["cp", "--", src, dest],
+        ["cp", "-L", "--", src, dest],
         project=project,
         timeout=120,  # 2-minute timeout for file copies
         cwd=cwd,
@@ -121,14 +123,9 @@ async def compose_check_running(
             unhealthy_services = services
             for successful_service in successful_services:
                 unhealthy_services.remove(successful_service["Service"])
-
-            msg = (
-                "One or more docker containers failed to start from "
-                f"{project.config}: {','.join(unhealthy_services)}"
-            )
-            raise RuntimeError(msg)
+            return []
     else:
-        raise RuntimeError("No services started")
+        return []
 
     return [service["Service"] for service in running_services]
 
@@ -288,7 +285,7 @@ async def compose_command(
     env = project.env if (project.env and forward_env) else {}
 
     # ansi (apply global override)
-    if display_type() == "plain":
+    if display_type_plain():
         ansi = "never"
     if ansi:
         compose_command = compose_command + ["--ansi", ansi]
@@ -307,18 +304,26 @@ async def compose_command(
     # build final command
     compose_command = compose_command + command
 
-    # function to run command
+    # set a concurrency limit for docker CLI invocations.
+    # this should help with running more containers in parallel while avoiding hangs on some systems
+    DEFAULT_CLI_CONCURRENCY = max((os.cpu_count() or 1) * 2, 4)
+    docker_cli_concurrency = int(
+        os.environ.get("INSPECT_DOCKER_CLI_CONCURRENCY", DEFAULT_CLI_CONCURRENCY)
+    )
+
+    # function to run command (wrapped in concurrency limiter)
     async def run_command(command_timeout: int | None) -> ExecResult[str]:
-        result = await subprocess(
-            compose_command,
-            input=input,
-            cwd=cwd,
-            env=env,
-            timeout=command_timeout,
-            capture_output=capture_output,
-            output_limit=output_limit,
-        )
-        return result
+        async with concurrency("docker-cli", docker_cli_concurrency):
+            result = await subprocess(
+                compose_command,
+                input=input,
+                cwd=cwd,
+                env=env,
+                timeout=command_timeout,
+                capture_output=capture_output,
+                output_limit=output_limit,
+            )
+            return result
 
     # we have observed underlying unreliability in docker compose in some linux
     # environments on EC2 -- this exhibits in very simple commands (e.g. compose config)
@@ -335,8 +340,8 @@ async def compose_command(
         retries = 0
         while True:
             try:
-                command_timeout = (
-                    timeout if retries == 0 else (min(timeout, 60) // retries)
+                command_timeout = max(
+                    timeout if retries == 0 else (min(timeout, 60) // retries), 1
                 )
                 return await run_command(command_timeout)
             except TimeoutError:

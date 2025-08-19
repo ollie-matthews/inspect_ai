@@ -20,11 +20,26 @@ def pytest_addoption(parser):
     parser.addoption(
         "--runapi", action="store_true", default=False, help="run API tests"
     )
+    parser.addoption(
+        "--runflaky", action="store_true", default=False, help="run flaky tests"
+    )
+    parser.addoption(
+        "--local-inspect-tools",
+        action="store_true",
+        default=False,
+        help="If set, run inspect tools from local source instead of pulling from Docker Hub",
+    )
+
+
+@pytest.fixture(scope="session")
+def local_inspect_tools(request):
+    return request.config.getoption("--local-inspect-tools")
 
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: mark test as slow to run")
     config.addinivalue_line("markers", "api: mark test as requiring API access")
+    config.addinivalue_line("markers", "flaky: mark test as flaky/unreliable")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -39,6 +54,12 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "api" in item.keywords:
                 item.add_marker(skip_api)
+
+    if not config.getoption("--runflaky"):
+        skip_flaky = pytest.mark.skip(reason="need --runflaky option to run")
+        for item in items:
+            if "flaky" in item.keywords:
+                item.add_marker(skip_flaky)
 
 
 @pytest.fixture(scope="module")

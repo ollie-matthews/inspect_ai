@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import (
@@ -5,8 +6,8 @@ from typing import (
     Callable,
     ParamSpec,
     Protocol,
+    Type,
     Union,
-    cast,
     overload,
     runtime_checkable,
 )
@@ -14,6 +15,7 @@ from typing import (
 from pydantic import BaseModel, Field
 
 from inspect_ai._util.error import PrerequisiteError
+from inspect_ai._util.metadata import MT, metadata_as
 from inspect_ai._util.registry import (
     RegistryInfo,
     is_registry_object,
@@ -42,8 +44,8 @@ NOANSWER = "N"
 
 Value = Union[
     str | int | float | bool,
-    list[str | int | float | bool],
-    dict[str, str | int | float | bool | None],
+    Sequence[str | int | float | bool],
+    Mapping[str, str | int | float | bool | None],
 ]
 """Value provided by a score.
 
@@ -120,6 +122,20 @@ class SampleScore(BaseModel):
 
     sample_metadata: dict[str, Any] | None = Field(default=None)
     """Metadata from the sample"""
+
+    def sample_metadata_as(self, metadata_cls: Type[MT]) -> MT | None:
+        """Pydantic model interface to sample metadata.
+
+        Args:
+          metadata_cls: Pydantic model type
+
+        Returns:
+          BaseModel: Instance of metadata_cls bound to sample metadata.
+        """
+        if self.sample_metadata is not None:
+            return metadata_as(self.sample_metadata, metadata_cls)
+        else:
+            return None
 
     scorer: str | None = Field(default=None)
     """Registry name of scorer that created this score."""
@@ -265,7 +281,7 @@ def metric_create(name: str, **kwargs: Any) -> Metric:
     Returns:
         Metric with registry info attribute
     """
-    return cast(Metric, registry_create("metric", name, **kwargs))
+    return registry_create("metric", name, **kwargs)
 
 
 def to_metric_specs(
@@ -340,7 +356,7 @@ def metric(
             )
             return metric
 
-        return metric_register(cast(Callable[P, Metric], metric_wrapper), metric_name)
+        return metric_register(metric_wrapper, metric_name)
 
     # for decorators with an explicit name, one more wrapper for the name
     if isinstance(name, str):

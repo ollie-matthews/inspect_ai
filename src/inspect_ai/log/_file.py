@@ -1,23 +1,27 @@
 import os
 import re
 from logging import getLogger
-from typing import Any, Callable, Generator, Literal, cast
+from pathlib import Path
+from typing import Any, Callable, Generator, Literal
 
-from pydantic import BaseModel
-from pydantic_core import to_json
+from pydantic import (
+    BaseModel,
+    Field,
+)
 
-from inspect_ai._util._async import run_coroutine
+from inspect_ai._util._async import current_async_backend, run_coroutine
 from inspect_ai._util.constants import ALL_LOG_FORMATS, EVAL_LOG_FORMAT
+from inspect_ai._util.error import EvalError
 from inspect_ai._util.file import (
     FileInfo,
-    async_fileystem,
     file,
     filesystem,
 )
-from inspect_ai._util.json import jsonable_python
+from inspect_ai._util.json import to_json_safe
 from inspect_ai.log._condense import resolve_sample_attachments
+from inspect_ai.log._log import EvalSampleSummary
 
-from ._log import EvalLog, EvalSample
+from ._log import EvalLog, EvalMetric, EvalSample
 from ._recorders import recorder_type_for_format, recorder_type_for_location
 
 logger = getLogger(__name__)
@@ -46,6 +50,28 @@ class EvalLogInfo(BaseModel):
 
     suffix: str | None
     """Log file suffix (e.g. "-scored")"""
+
+
+class LogOverview(BaseModel):
+    """The log overview is a thinned manifest summarizing an evaluation log"""
+
+    eval_id: str
+    run_id: str
+
+    task: str
+    task_id: str
+    task_version: int | str
+
+    version: int
+    status: Literal["started", "success", "cancelled", "error"]
+    error: EvalError | None = Field(default=None)
+
+    model: str
+
+    started_at: str
+    completed_at: str
+
+    primary_metric: EvalMetric | None = Field(default=None)
 
 
 def list_eval_logs(
@@ -96,66 +122,11 @@ def list_eval_logs(
         return eval_logs
 
 
-async def list_eval_logs_async(
-    log_dir: str = os.environ.get("INSPECT_LOG_DIR", "./logs"),
-    formats: list[Literal["eval", "json"]] | None = None,
-    recursive: bool = True,
-    descending: bool = True,
-    fs_options: dict[str, Any] = {},
-) -> list[EvalLogInfo]:
-    """List all eval logs in a directory.
-
-    Will be async for filesystem providers that support async (e.g. s3, gcs, etc.)
-    otherwise will fallback to sync implementation.
-
-    Args:
-      log_dir (str): Log directory (defaults to INSPECT_LOG_DIR)
-      formats (Literal["eval", "json"]): Formats to list (default
-        to listing all formats)
-      recursive (bool): List log files recursively (defaults to True).
-      descending (bool): List in descending order.
-      fs_options (dict[str, Any]): Optional. Additional arguments to pass through
-          to the filesystem provider (e.g. `S3FileSystem`).
-
-    Returns:
-       List of EvalLog Info.
-    """
-    # async filesystem if we can
-    fs = filesystem(log_dir, fs_options)
-    if fs.is_async():
-        async with async_fileystem(log_dir, fs_options=fs_options) as async_fs:
-            if await async_fs._exists(log_dir):
-                # prevent caching of listings
-                async_fs.invalidate_cache(log_dir)
-                # list logs
-                if recursive:
-                    files: list[dict[str, Any]] = []
-                    async for _, _, filenames in async_fs._walk(log_dir, detail=True):
-                        files.extend(filenames.values())
-                else:
-                    files = cast(
-                        list[dict[str, Any]],
-                        await async_fs._ls(log_dir, detail=True),
-                    )
-                logs = [fs._file_info(file) for file in files]
-                # resolve to eval logs
-                return log_files_from_ls(logs, formats, descending)
-            else:
-                return []
-    else:
-        return list_eval_logs(
-            log_dir=log_dir,
-            formats=formats,
-            recursive=recursive,
-            descending=descending,
-            fs_options=fs_options,
-        )
-
-
 def write_eval_log(
     log: EvalLog,
-    location: str | FileInfo | None = None,
+    location: str | Path | FileInfo | None = None,
     format: Literal["eval", "json", "auto"] = "auto",
+    if_match_etag: str | None = None,
 ) -> None:
     """Write an evaluation log.
 
@@ -164,14 +135,29 @@ def write_eval_log(
        location (str | FileInfo): Location to write log to.
        format (Literal["eval", "json", "auto"]): Write to format
           (defaults to 'auto' based on `log_file` extension)
+       if_match_etag (str | None): ETag for conditional write. If provided
+          and writing to S3, will only write if the current ETag matches.
+
+    Raises:
+       WriteConflictError: If if_match_etag is provided and doesn't match
+          the current ETag of the file in S3.
     """
-    run_coroutine(write_eval_log_async(log, location, format))
+    # don't mix trio and asyncio
+    if current_async_backend() == "trio":
+        raise RuntimeError(
+            "write_eval_log cannot be called from a trio async context (please use write_eval_log_async instead)"
+        )
+
+    # will use s3fs and is not called from main inspect solver/scorer/tool/sandbox
+    # flow, so force the use of asyncio
+    run_coroutine(write_eval_log_async(log, location, format, if_match_etag))
 
 
 async def write_eval_log_async(
     log: EvalLog,
-    location: str | FileInfo | None = None,
+    location: str | Path | FileInfo | None = None,
     format: Literal["eval", "json", "auto"] = "auto",
+    if_match_etag: str | None = None,
 ) -> None:
     """Write an evaluation log.
 
@@ -180,6 +166,8 @@ async def write_eval_log_async(
        location (str | FileInfo): Location to write log to.
        format (Literal["eval", "json", "auto"]): Write to format
           (defaults to 'auto' based on `log_file` extension)
+       if_match_etag (str | None): ETag for conditional write. If provided
+          and writing to S3, will only write if the current ETag matches.
     """
     # resolve location
     if location is None:
@@ -189,7 +177,13 @@ async def write_eval_log_async(
             raise ValueError(
                 "EvalLog passe to write_eval_log does not have a location, so you must pass an explicit location"
             )
-    location = location if isinstance(location, str) else location.name
+    location = (
+        location
+        if isinstance(location, str)
+        else location.as_posix()
+        if isinstance(location, Path)
+        else location.name
+    )
 
     logger.debug(f"Writing eval log to {location}")
 
@@ -198,7 +192,7 @@ async def write_eval_log_async(
         recorder_type = recorder_type_for_location(location)
     else:
         recorder_type = recorder_type_for_format(format)
-    await recorder_type.write_log(location, log)
+    await recorder_type.write_log(location, log, if_match_etag)
 
     logger.debug(f"Writing eval log to {location} completed")
 
@@ -232,21 +226,21 @@ def write_log_dir_manifest(
     # resolve to manifest (make filenames relative to the log dir)
     names = [manifest_eval_log_name(log, log_dir, fs.sep) for log in logs]
     headers = read_eval_log_headers(logs)
+
+    headers[0].reductions = None
     manifest_logs = dict(zip(names, headers))
 
     # form target path and write
     output_dir = output_dir or log_dir
     fs = filesystem(output_dir)
     manifest = f"{output_dir}{fs.sep}{filename}"
-    manifest_json = to_json(
-        value=manifest_logs, indent=2, exclude_none=True, fallback=lambda _x: None
-    )
+    manifest_json = to_json_safe(manifest_logs)
     with file(manifest, mode="wb", fs_options=fs_options) as f:
         f.write(manifest_json)
 
 
 def read_eval_log(
-    log_file: str | EvalLogInfo,
+    log_file: str | Path | EvalLogInfo,
     header_only: bool = False,
     resolve_attachments: bool = False,
     format: Literal["eval", "json", "auto"] = "auto",
@@ -265,13 +259,26 @@ def read_eval_log(
     Returns:
        EvalLog object read from file.
     """
+    # don't mix trio and asyncio
+    if current_async_backend() == "trio":
+        raise RuntimeError(
+            "read_eval_log cannot be called from a trio async context (please use read_eval_log_async instead)"
+        )
+
+    # will use s3fs and is not called from main inspect solver/scorer/tool/sandbox
+    # flow, so force the use of asyncio
     return run_coroutine(
-        read_eval_log_async(log_file, header_only, resolve_attachments, format)
+        read_eval_log_async(
+            log_file,
+            header_only,
+            resolve_attachments,
+            format,
+        )
     )
 
 
 async def read_eval_log_async(
-    log_file: str | EvalLogInfo,
+    log_file: str | Path | EvalLogInfo,
     header_only: bool = False,
     resolve_attachments: bool = False,
     format: Literal["eval", "json", "auto"] = "auto",
@@ -281,7 +288,7 @@ async def read_eval_log_async(
     Args:
        log_file (str | FileInfo): Log file to read.
        header_only (bool): Read only the header (i.e. exclude
-         the "samples" and "logging" fields). Defaults to False.
+          the "samples" and "logging" fields). Defaults to False.
        resolve_attachments (bool): Resolve attachments (e.g. images)
           to their full content.
        format (Literal["eval", "json", "auto"]): Read from format
@@ -291,7 +298,13 @@ async def read_eval_log_async(
        EvalLog object read from file.
     """
     # resolve to file path
-    log_file = log_file if isinstance(log_file, str) else log_file.name
+    log_file = (
+        log_file
+        if isinstance(log_file, str)
+        else log_file.as_posix()
+        if isinstance(log_file, Path)
+        else log_file.name
+    )
     logger.debug(f"Reading eval log from {log_file}")
 
     # get recorder type
@@ -321,11 +334,13 @@ async def read_eval_log_async(
 def read_eval_log_headers(
     log_files: list[str] | list[EvalLogInfo],
 ) -> list[EvalLog]:
+    # will use s3fs and is not called from main inspect solver/scorer/tool/sandbox
+    # flow, so force the use of asyncio
     return run_coroutine(read_eval_log_headers_async(log_files))
 
 
 async def read_eval_log_headers_async(
-    log_files: list[str] | list[EvalLogInfo],
+    log_files: list[str] | list[Path] | list[EvalLogInfo],
 ) -> list[EvalLog]:
     return [
         await read_eval_log_async(log_file, header_only=True) for log_file in log_files
@@ -333,9 +348,10 @@ async def read_eval_log_headers_async(
 
 
 def read_eval_log_sample(
-    log_file: str | EvalLogInfo,
-    id: int | str,
+    log_file: str | Path | EvalLogInfo,
+    id: int | str | None = None,
     epoch: int = 1,
+    uuid: str | None = None,
     resolve_attachments: bool = False,
     format: Literal["eval", "json", "auto"] = "auto",
 ) -> EvalSample:
@@ -343,8 +359,11 @@ def read_eval_log_sample(
 
     Args:
        log_file (str | FileInfo): Log file to read.
-       id (int | str): Sample id to read.
+       id (int | str): Sample id to read. Optional, alternatively
+         specify `uuid` (you must specify `id` or `uuid`)
        epoch (int): Epoch for sample id (defaults to 1)
+       uuid: Sample uuid to read. Optional, alternatively specify
+         `id` and `epoch` (you must specify either `uuid` or `id`)
        resolve_attachments (bool): Resolve attachments (e.g. images)
           to their full content.
        format (Literal["eval", "json", "auto"]): Read from format
@@ -356,15 +375,26 @@ def read_eval_log_sample(
     Raises:
        IndexError: If the passed id and epoch are not found.
     """
+    # don't mix trio and asyncio
+    if current_async_backend() == "trio":
+        raise RuntimeError(
+            "read_eval_log_sample cannot be called from a trio async context (please use read_eval_log_sample_async instead)"
+        )
+
+    # will use s3fs and is not called from main inspect solver/scorer/tool/sandbox
+    # flow, so force the use of asyncio
     return run_coroutine(
-        read_eval_log_sample_async(log_file, id, epoch, resolve_attachments, format)
+        read_eval_log_sample_async(
+            log_file, id, epoch, uuid, resolve_attachments, format
+        )
     )
 
 
 async def read_eval_log_sample_async(
-    log_file: str | EvalLogInfo,
-    id: int | str,
+    log_file: str | Path | EvalLogInfo,
+    id: int | str | None = None,
     epoch: int = 1,
+    uuid: str | None = None,
     resolve_attachments: bool = False,
     format: Literal["eval", "json", "auto"] = "auto",
 ) -> EvalSample:
@@ -374,6 +404,7 @@ async def read_eval_log_sample_async(
        log_file (str | FileInfo): Log file to read.
        id (int | str): Sample id to read.
        epoch (int): Epoch for sample id (defaults to 1)
+       uuid: Sample uuid to read.
        resolve_attachments (bool): Resolve attachments (e.g. images)
           to their full content.
        format (Literal["eval", "json", "auto"]): Read from format
@@ -386,13 +417,25 @@ async def read_eval_log_sample_async(
        IndexError: If the passed id and epoch are not found.
     """
     # resolve to file path
-    log_file = log_file if isinstance(log_file, str) else log_file.name
+    log_file = (
+        log_file
+        if isinstance(log_file, str)
+        else log_file.as_posix()
+        if isinstance(log_file, Path)
+        else log_file.name
+    )
+
+    # validate that either id or uuid is passed
+    if id is None and uuid is None:
+        raise ValueError(
+            "You must specify either a sample 'id' and 'epoch' or a sample 'uuid'"
+        )
 
     if format == "auto":
         recorder_type = recorder_type_for_location(log_file)
     else:
         recorder_type = recorder_type_for_format(format)
-    sample = await recorder_type.read_log_sample(log_file, id, epoch)
+    sample = await recorder_type.read_log_sample(log_file, id, epoch, uuid)
 
     if resolve_attachments:
         sample = resolve_sample_attachments(sample)
@@ -400,8 +443,63 @@ async def read_eval_log_sample_async(
     return sample
 
 
+def read_eval_log_sample_summaries(
+    log_file: str | Path | EvalLogInfo,
+    format: Literal["eval", "json", "auto"] = "auto",
+) -> list[EvalSampleSummary]:
+    """Read sample summaries from an eval log.
+
+    Args:
+       log_file (str | FileInfo): Log file to read.
+       format (Literal["eval", "json", "auto"]): Read from format
+          (defaults to 'auto' based on `log_file` extension)
+
+    Returns:
+       Sample summaries for eval log.
+    """
+    # don't mix trio and asyncio
+    if current_async_backend() == "trio":
+        raise RuntimeError(
+            "read_eval_log_sample_summaries cannot be called from a trio async context (please use read_eval_log_sample_summaries_asymc instead)"
+        )
+
+    # will use s3fs and is not called from main inspect solver/scorer/tool/sandbox
+    # flow, so force the use of asyncio
+    return run_coroutine(read_eval_log_sample_summaries_async(log_file, format))
+
+
+async def read_eval_log_sample_summaries_async(
+    log_file: str | Path | EvalLogInfo,
+    format: Literal["eval", "json", "auto"] = "auto",
+) -> list[EvalSampleSummary]:
+    """Read sample summaries from an eval log.
+
+    Args:
+       log_file (str | FileInfo): Log file to read.
+       format (Literal["eval", "json", "auto"]): Read from format
+          (defaults to 'auto' based on `log_file` extension)
+
+    Returns:
+       Sample summaries for eval log.
+    """
+    # resolve to file path
+    log_file = (
+        log_file
+        if isinstance(log_file, str)
+        else log_file.as_posix()
+        if isinstance(log_file, Path)
+        else log_file.name
+    )
+
+    if format == "auto":
+        recorder_type = recorder_type_for_location(log_file)
+    else:
+        recorder_type = recorder_type_for_format(format)
+    return await recorder_type.read_log_sample_summaries(log_file)
+
+
 def read_eval_log_samples(
-    log_file: str | EvalLogInfo,
+    log_file: str | Path | EvalLogInfo,
     all_samples_required: bool = True,
     resolve_attachments: bool = False,
     format: Literal["eval", "json", "auto"] = "auto",
@@ -475,14 +573,21 @@ def manifest_eval_log_name(info: EvalLogInfo, log_dir: str, sep: str) -> str:
 
 def log_files_from_ls(
     ls: list[FileInfo],
-    formats: list[Literal["eval", "json"]] | None,
+    formats: list[Literal["eval", "json"]] | None = None,
     descending: bool = True,
+    sort: bool = True,
 ) -> list[EvalLogInfo]:
     extensions = [f".{format}" for format in (formats or ALL_LOG_FORMATS)]
     return [
         log_file_info(file)
-        for file in sorted(
-            ls, key=lambda file: (file.mtime if file.mtime else 0), reverse=descending
+        for file in (
+            sorted(
+                ls,
+                key=lambda file: (file.mtime if file.mtime else 0),
+                reverse=descending,
+            )
+            if sort
+            else ls
         )
         if file.type == "file" and is_log_file(file.name, extensions)
     ]
@@ -538,13 +643,76 @@ def eval_log_json(log: EvalLog) -> bytes:
     # these values often result from solvers using metadata to
     # pass around 'live' objects -- this is fine to do and we
     # don't want to prevent it at the serialization level
-    return to_json(
-        value=jsonable_python(log),
-        indent=2,
-        exclude_none=True,
-        fallback=lambda _x: None,
-    )
+    return to_json_safe(log)
 
 
 def eval_log_json_str(log: EvalLog) -> str:
     return eval_log_json(log).decode()
+
+
+def write_log_listing(
+    log_dir: str,
+    *,
+    filename: str = "listing.json",
+    output_dir: str | None = None,
+    fs_options: dict[str, Any] = {},
+) -> None:
+    """Write a listing file for a log directory.
+
+    A listing file is a thinned manifest summarizing the logs in the directory (but with much less information than a full manifest of headers).
+
+    Args:
+      log_dir (str): Log directory to write overview for.
+      filename (str): Manifest filename (defaults to "overview.json")
+      output_dir (str | None): Output directory for manifest (defaults to log_dir)
+      fs_options (dict[str,Any]): Optional. Additional arguments to pass through
+        to the filesystem provider (e.g. `S3FileSystem`).
+    """
+    # resolve log dir to full path
+    fs = filesystem(log_dir)
+    log_dir = fs.info(log_dir).name
+
+    # list eval logs
+    logs = list_eval_logs(log_dir)
+
+    # resolve to overview (make filenames relative to the log dir)
+    names = [manifest_eval_log_name(log, log_dir, fs.sep) for log in logs]
+    headers = read_eval_log_headers(logs)
+    overviews = [to_overview(header) for header in headers]
+
+    file_overviews = dict(zip(names, overviews))
+
+    # form target path and write
+    output_dir = output_dir or log_dir
+    fs = filesystem(output_dir)
+    manifest = f"{output_dir}{fs.sep}{filename}"
+    manifest_json = to_json_safe(file_overviews)
+    with file(manifest, mode="wb", fs_options=fs_options) as f:
+        f.write(manifest_json)
+
+
+def to_overview(header: EvalLog) -> LogOverview:
+    """Convert an EvalLog header to a thinned overview."""
+    # Get the primary metric if it exists
+    primary_metric: EvalMetric | None = None
+    if (
+        header.results is not None
+        and header.results.scores
+        and (first_scorer := header.results.scores[0]).metrics
+    ):
+        primary_metric = next(iter(first_scorer.metrics.values()))
+
+    return LogOverview(
+        eval_id=header.eval.eval_id,
+        run_id=header.eval.run_id,
+        task=header.eval.task,
+        task_id=header.eval.task_id,
+        task_version=header.eval.task_version,
+        version=header.version,
+        status=header.status,
+        error=header.error,
+        model=header.eval.model,
+        started_at=header.stats.started_at,
+        completed_at=header.stats.completed_at,
+        primary_metric=primary_metric,
+    )
