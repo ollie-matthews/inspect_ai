@@ -33,6 +33,7 @@ The `openai` provider supports the following custom model args (other model args
 | Model Arg | Description |
 |--------------------------|----------------------------------------------|
 | `responses_api` | Use the OpenAI Responses API rather than the Chat Completions API. |
+| `responses_store` | Pass `store=True` to the Responses API (defaults to `True`).
 | `service_tier` | Processing type used for serving the request ("auto", "default", or "flex"). |
 | `background` | Run generate requests asynchronously, polling response objects to check status over time. |
 | `safety_identifier` | A stable identifier used to help detect users of your application. |
@@ -59,7 +60,7 @@ eval(
 
 ### Responses API
 
-By default, Inspect uses the standard OpenAI Chat Completions API for gpt-series models and the new [Responses API](https://platform.openai.com/docs/api-reference/responses) for o-series models and the `computer_use_preview` model.
+By default, Inspect uses the standard OpenAI Chat Completions API for GPT-4 models and the new [Responses API](https://platform.openai.com/docs/api-reference/responses) for GPT-5 and o-series models and the `computer_use_preview` model.
 
 If you want to manually enable or disable the Responses API you can use the `responses_api` model argument. For example:
 
@@ -68,6 +69,17 @@ inspect eval math.py --model openai/gpt-4o -M responses_api=true
 ```
 
 Note that certain models including `o1-pro` and `computer_use_preview` *require* the use of the Responses API. Check the Open AI [models documentation](https://platform.openai.com/docs/models) for details on which models are supported by the respective APIs.
+
+### Responses Store
+
+By default, the Responses API stores requests on the server for retrieval of previous reasoning content (which is not transmitted as part of responses). To control this behavior explicitly use the `responses_store` model argument. For example:
+
+```bash
+inspect eval math.py --model openai/o4-mini -M responses_store=false
+```
+
+For example, you might need to do this if you have a non-logging interface to OpenAI models (as `store` is incompatible with non-logging interfaces). Note that some features (such as computer use) _require_ responses store to be `True`.
+
 
 ### Flex Processing
 
@@ -817,12 +829,26 @@ export DEEPSEEK_BASE_URL=https://api.deepseek.com
 inspect eval arc.py --model openai-api/deepseek/deepseek-reasoner
 ```
 
+### Responses API
+
+You can enable the use of the Responses API with the `openai-api` provider by passing the `responses_api` model arg. For example:
+
+``` bash
+$ inspect eval arc.py --model openai-api/<provider>/<model> -M responses_api=true
+```
+
+Or using the `eval()` function:
+
+``` python
+eval("arc.py", model="openai-api/<provider>/<model>", model_args=dict(responses_api=True))
+```
+
 ### Tool Emulation {#tool-emulation-openai}
 
 When using OpenAI compatible model providers, tool calling support can be 'emulated' for models that don't yet support it. Use the `emulate_tools` model arg to force tool emulation:
 
 ``` bash
-inspect eval ctf.py -M emulate_tools=true
+inspect eval ctf.py --model openai-api/<provider>/<model> -M emulate_tools=true
 ```
 
 Tool calling emulation works by encoding tool JSON schema in an XML tag and asking the model to make tool calls using another XML tag. This works with varying degrees of efficacy depending on the model and the complexity of the tool schema. Before using tool emulation you should always check if your provider implements native support for tool calling on the model you are using, as that will generally work better.

@@ -98,6 +98,7 @@ class SandboxEnvironment(abc.ABC):
         user: str | None = None,
         timeout: int | None = None,
         timeout_retry: bool = True,
+        concurrency: bool = True,
     ) -> ExecResult[str]:
         """Execute a command within a sandbox environment.
 
@@ -117,7 +118,8 @@ class SandboxEnvironment(abc.ABC):
           timeout_retry: Retry the command in the case that it times out.
             Commands will be retried up to twice, with a timeout of no greater
             than 60 seconds for the first retry and 30 for the second.
-
+          concurrency: For sandboxes that run locally, request that the `concurrency()`
+            function be used to throttle concurrent subprocesses.
 
         Returns:
           Execution result (status code, stderr/stdout, etc.)
@@ -224,6 +226,10 @@ class SandboxEnvironment(abc.ABC):
             raise TypeError(
                 f"Expected instance of {sandbox_cls.__name__}, got {type(self).__name__}"
             )
+
+    def default_polling_interval(self) -> float:
+        """Polling interval for sandbox service requests."""
+        return 2
 
     @classmethod
     def default_concurrency(cls) -> int | None:

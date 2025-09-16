@@ -41,6 +41,7 @@ from google.genai.types import (
     Type,
 )
 from pydantic import JsonValue
+from shortuuid import uuid
 from typing_extensions import override
 
 from inspect_ai._util.constants import BASE_64_DATA_REMOVED, NO_CONTENT
@@ -272,8 +273,14 @@ class GoogleGenAIAPI(ModelAPI):
 
         # Create google-genai types.
         gemini_contents = await as_chat_messages(client, input)
-        gemini_tools = self.chat_tools(tools) if len(tools) > 0 else None
-        gemini_tool_config = chat_tool_config(tool_choice) if len(tools) > 0 else None
+        has_native_search, gemini_tools = (
+            self.chat_tools(tools) if len(tools) > 0 else (False, None)
+        )
+        gemini_tool_config = (
+            chat_tool_config(tool_choice)
+            if not has_native_search and len(tools) > 0
+            else None
+        )
         parameters = GenerateContentConfig(
             http_options=HttpOptions(headers={HttpHooks.REQUEST_ID_HEADER: request_id}),
             temperature=config.temperature,
@@ -436,7 +443,7 @@ class GoogleGenAIAPI(ModelAPI):
             )
         )
 
-    def chat_tools(self, tools: list[ToolInfo]) -> ToolListUnion:
+    def chat_tools(self, tools: list[ToolInfo]) -> tuple[bool, ToolListUnion]:
         has_native_search, function_declarations = functools.reduce(
             self._categorize_tool, tools, (False, list[FunctionDeclaration]())
         )
@@ -449,9 +456,9 @@ class GoogleGenAIAPI(ModelAPI):
             )
 
         return (
-            [Tool(google_search=GoogleSearch())]
+            (True, [Tool(google_search=GoogleSearch())])
             if has_native_search
-            else [Tool(function_declarations=function_declarations)]
+            else (False, [Tool(function_declarations=function_declarations)])
         )
 
     def _resolve_batcher(self, config: GenerateConfig, client: Client) -> None:
@@ -536,17 +543,22 @@ def consecutive_tool_message_reducer(
     messages: list[Content],
     message: Content,
 ) -> list[Content]:
-    if (
-        message.role == "function"
-        and len(messages) > 0
-        and messages[-1].role == "function"
-    ):
+    if is_tool_message(message) and len(messages) > 0 and is_tool_message(messages[-1]):
         messages[-1] = Content(
-            role="function", parts=(messages[-1].parts or []) + (message.parts or [])
+            role="user", parts=(messages[-1].parts or []) + (message.parts or [])
         )
     else:
         messages.append(message)
     return messages
+
+
+def is_tool_message(message: Content) -> bool:
+    return (
+        message.role == "user"
+        and message.parts is not None
+        and len(message.parts) > 0
+        and message.parts[0].function_response is not None
+    )
 
 
 async def content(
@@ -591,14 +603,14 @@ async def content(
 
     elif isinstance(message, ChatMessageTool):
         response = FunctionResponse(
-            name=message.tool_call_id,
+            name=message.function,
             response={
                 "content": (
                     message.error.message if message.error is not None else message.text
                 )
             },
         )
-        return Content(role="function", parts=[Part(function_response=response)])
+        return Content(role="user", parts=[Part(function_response=response)])
 
 
 async def content_part(client: Client, content: InspectContent | str) -> Part:
@@ -607,7 +619,11 @@ async def content_part(client: Client, content: InspectContent | str) -> Part:
     elif isinstance(content, ContentText):
         return Part.from_text(text=content.text or NO_CONTENT)
     elif isinstance(content, ContentReasoning):
-        return Part(text=content.reasoning or NO_CONTENT, thought=True)
+        return Part(
+            text=content.reasoning or NO_CONTENT,
+            thought=True,
+            thought_signature=content.signature.encode() if content.signature else None,
+        )
     elif isinstance(content, ContentData):
         raise RuntimeError("Google provider should never encounter ContentData")
     elif isinstance(content, ContentToolUse):
@@ -652,61 +668,66 @@ async def extract_system_message_as_parts(
 
 # https://ai.google.dev/gemini-api/tutorials/extract_structured_data#define_the_schema
 def schema_from_param(
-    param: ToolParam | ToolParams, nullable: bool | None = False
+    param: ToolParam | ToolParams,
+    nullable: bool | None = False,
+    description: str | None = None,
 ) -> Schema:
     if isinstance(param, ToolParams):
         param = ToolParam(
             type=param.type, properties=param.properties, required=param.required
         )
 
+    # use fallback description if the param doesn't have its own
+    param_description = param.description or description
+
     if param.type == "number":
         return Schema(
-            type=Type.NUMBER, description=param.description, nullable=nullable
+            type=Type.NUMBER, description=param_description, nullable=nullable
         )
     elif param.type == "integer":
         return Schema(
-            type=Type.INTEGER, description=param.description, nullable=nullable
+            type=Type.INTEGER, description=param_description, nullable=nullable
         )
     elif param.type == "boolean":
         return Schema(
-            type=Type.BOOLEAN, description=param.description, nullable=nullable
+            type=Type.BOOLEAN, description=param_description, nullable=nullable
         )
     elif param.type == "string":
         if param.format == "date-time":
             return Schema(
                 type=Type.STRING,
-                description=param.description,
+                description=param_description,
                 format="^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
                 nullable=nullable,
             )
         elif param.format == "date":
             return Schema(
                 type=Type.STRING,
-                description=param.description,
+                description=param_description,
                 format="^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
                 nullable=nullable,
             )
         elif param.format == "time":
             return Schema(
                 type=Type.STRING,
-                description=param.description,
+                description=param_description,
                 format="^[0-9]{2}:[0-9]{2}:[0-9]{2}$",
                 nullable=nullable,
             )
         return Schema(
-            type=Type.STRING, description=param.description, nullable=nullable
+            type=Type.STRING, description=param_description, nullable=nullable
         )
     elif param.type == "array":
         return Schema(
             type=Type.ARRAY,
-            description=param.description,
+            description=param_description,
             items=schema_from_param(param.items) if param.items else None,
             nullable=nullable,
         )
     elif param.type == "object":
         return Schema(
             type=Type.OBJECT,
-            description=param.description,
+            description=param_description,
             properties={k: schema_from_param(v) for k, v in param.properties.items()}
             if param.properties is not None
             else {},
@@ -716,13 +737,20 @@ def schema_from_param(
     # convert unions to optional params if the second type is 'null'
     elif param.anyOf:
         if len(param.anyOf) == 2 and param.anyOf[1].type == "null":
-            return schema_from_param(param.anyOf[0], nullable=True)
+            return schema_from_param(
+                param.anyOf[0], nullable=True, description=param_description
+            )
         else:
-            return Schema(type=Type.TYPE_UNSPECIFIED)
+            return Schema(type=Type.TYPE_UNSPECIFIED, description=param_description)
     elif param.enum:
-        return Schema(type=Type.STRING, format="enum", enum=param.enum)
+        return Schema(
+            type=Type.STRING,
+            format="enum",
+            enum=param.enum,
+            description=param_description,
+        )
     else:
-        return Schema(type=Type.TYPE_UNSPECIFIED)
+        return Schema(type=Type.TYPE_UNSPECIFIED, description=param_description)
 
 
 def chat_tool_config(tool_choice: ToolChoice) -> ToolConfig:
@@ -778,7 +806,12 @@ def completion_choice_from_candidate(
         )
 
         content = [
-            ContentReasoning(reasoning=part.text)
+            ContentReasoning(
+                reasoning=part.text,
+                signature=part.thought_signature.decode()
+                if part.thought_signature
+                else None,
+            )
             if part.thought is True
             else ContentText(
                 text=part.text, citations=get_candidate_citations(candidate)
@@ -799,7 +832,7 @@ def completion_choice_from_candidate(
                 ):
                     tool_calls.append(
                         ToolCall(
-                            id=part.function_call.name,
+                            id=f"{part.function_call.name}_{uuid()}",
                             function=part.function_call.name,
                             arguments=part.function_call.args,
                         )

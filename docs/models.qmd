@@ -16,14 +16,14 @@ To select a model for an evaluation, pass it's name on the command line or use t
 
 ``` bash
 inspect eval arc.py --model openai/gpt-4o-mini
-inspect eval arc.py --model anthropic/claude-3-5-sonnet-latest
+inspect eval arc.py --model anthropic/claude-sonnet-4-0
 ```
 
 Or:
 
 ``` python
 eval("arc.py", model="openai/gpt-4o-mini")
-eval("arc.py", model="anthropic/claude-3-5-sonnet-latest")
+eval("arc.py", model="anthropic/claude-sonnet-4-0")
 ```
 
 Alternatively, you can set the `INSPECT_EVAL_MODEL` environment variable (either in the shell or a `.env` file) to select a model externally:
@@ -161,6 +161,8 @@ Or with `eval()`:
 ``` python
 eval("math.py", model_roles = { "grader": "google/gemini-2.0-flash" })
 ```
+
+Note that the built-in [model-graded scorers](scorers.qmd#model-graded) (e.g. `model_graded_qa()`, `model_graded_fact()`) look for the `grader` role by default.
 
 ### Role Resolution
 

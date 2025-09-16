@@ -47,7 +47,6 @@ from inspect_ai._util.registry import registry_unqualified_name
 from inspect_ai._util.text import truncate_string_to_bytes
 from inspect_ai._util.trace import trace_action
 from inspect_ai._util.working import sample_waiting_time
-from inspect_ai.model._display import display_conversation_message
 from inspect_ai.model._model_output import ModelOutput
 from inspect_ai.tool import Tool, ToolCall, ToolError, ToolInfo
 from inspect_ai.tool._tool import (
@@ -238,7 +237,6 @@ async def execute_tools(
                                     tool_call_id=call.id,
                                     function=call.function,
                                     error=tool_error,
-                                    internal=call.internal,
                                 )
                             ]
                             + messages,
@@ -263,7 +261,6 @@ async def execute_tools(
                 function=call.function,
                 arguments=call.arguments,
                 view=call.view,
-                internal=call.internal,
                 pending=True,
             )
 
@@ -306,11 +303,9 @@ async def execute_tools(
                     f"Tool call '{call.function}' was cancelled by operator."
                 )
                 result_messages.append(tool_message)
-                display_conversation_message(tool_message)
             elif result is not None:
                 for message in result.messages:
                     result_messages.append(message)
-                    display_conversation_message(message)
                 if result.output is not None:
                     result_output = result.output
 
@@ -447,13 +442,36 @@ async def agent_handoff(
             content=tool_result,
             tool_call_id=call.id,
             function=call.function,
-            internal=call.internal,
         )
     )
+
+    def is_transferred_to_tool_response(message: ChatMessage) -> bool:
+        return isinstance(message, ChatMessageTool) and message.tool_call_id == call.id
 
     # run input filter if we have one
     if agent_tool.input_filter is not None:
         agent_conversation = await agent_tool.input_filter(agent_conversation)
+
+    # if our ChatMessageTool boundary was removed (e.g. due to using the `remove_tools`
+    # or `content_only` filter) then add a ChatMessageUser boundary.
+    if not is_transferred_to_tool_response(agent_conversation[-1]):
+        agent_conversation.append(ChatMessageUser(content=tool_result))
+
+    def is_agent_conversation_boundary(message: ChatMessage) -> bool:
+        if is_transferred_to_tool_response(message):
+            return True
+        elif isinstance(message, ChatMessageUser):
+            if isinstance(message.content, str):
+                return message.content == tool_result
+            elif len(message.content) > 0 and isinstance(
+                message.content[0], ContentText
+            ):
+                return message.content[0].text == tool_result
+            else:
+                return False
+
+        else:
+            return False
 
     # remove system messages (as they can refer to tools or other special
     # instructions that don't apply to the sub-agent)
@@ -479,6 +497,16 @@ async def agent_handoff(
                 agent_state = await agent_tool.agent(agent_state, **arguments)
     except LimitExceededError as ex:
         limit_error = ex
+
+    # find the demaraction line of 'new' messages
+    agent_conversation_boundary_indices = [
+        i
+        for i, msg in enumerate(agent_state.messages)
+        if is_agent_conversation_boundary(msg)
+    ]
+    if agent_conversation_boundary_indices:
+        start_idx = agent_conversation_boundary_indices[-1] + 1
+        agent_state.messages = agent_state.messages[start_idx:]
 
     # determine which messages are new and return only those (but exclude new
     # system messages as they an internal matter for the handed off to agent.

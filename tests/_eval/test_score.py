@@ -1,7 +1,19 @@
+import contextlib
+import functools
+import pathlib
+from typing import Any
+
 import pydantic
 import pytest
+from test_helpers.utils import skip_if_no_openai
 
-from inspect_ai._eval.score import ScoreAction, _get_updated_events, _get_updated_scores
+from inspect_ai._eval.score import (
+    ScoreAction,
+    _get_updated_events,
+    _get_updated_scores,
+    resolve_scorers,
+    score_async,
+)
 from inspect_ai.dataset import Sample
 from inspect_ai.log import (
     EvalSample,
@@ -12,13 +24,18 @@ from inspect_ai.log import (
     ScoreEvent,
     Transcript,
 )
+from inspect_ai.log._file import read_eval_log_async
 from inspect_ai.log._transcript import init_transcript
 from inspect_ai.model import ChatCompletionChoice, GenerateConfig, ModelOutput
 from inspect_ai.model._chat_message import (
     ChatMessageAssistant,
     ChatMessageUser,
 )
+from inspect_ai.scorer import accuracy
 from inspect_ai.scorer._metric import SampleScore, Score
+from inspect_ai.scorer._scorer import Scorer, scorer
+from inspect_ai.scorer._target import Target
+from inspect_ai.solver._task_state import TaskState
 from inspect_ai.util._span import span
 
 
@@ -195,7 +212,7 @@ async def test_get_updated_events(test_case: UpdatedEventsTestCase):
     expected_events = [*base_events]
     new_events: list[Event] = []
     events: list[Event]
-    transcript: Transcript
+    transcript: Transcript = Transcript()
 
     for events, scores in (
         (existing_events, test_case.existing_scores),
@@ -257,3 +274,159 @@ async def test_get_updated_events(test_case: UpdatedEventsTestCase):
     assert (
         existing_scorers_span == updated_scorers_span
     ) is not test_case.expected_new_scorer_span
+
+
+LOGS_DIR = pathlib.Path(__file__).parents[1] / "scorer/logs"
+LOG_SCORED = (
+    LOGS_DIR / "2025-02-11T15-18-04-05-00_popularity_mj7khqpMM4GBCfVQozKgzB.eval"
+)
+LOG_UNSCORED = (
+    LOGS_DIR / "2025-02-11T15-17-00-05-00_popularity_dPiJifoWeEQBrfWsAopzWr.eval"
+)
+
+
+@scorer(metrics=[accuracy()])
+def adds_to_state() -> Scorer:
+    async def score(state: TaskState, target: Target) -> Score:
+        state.scores = (state.scores or {}) | {"adds_to_state": Score(value=0.5)}
+        return Score(value=0.5)
+
+    return score
+
+
+@pytest.mark.parametrize(
+    ("log_file", "action", "scorers_unresolved", "expected_scores", "expected_error"),
+    [
+        pytest.param(
+            LOG_UNSCORED,
+            None,
+            [("match", dict[str, Any]())],
+            {"match": {"num_metrics": 2}},
+            None,
+            id="unscored",
+        ),
+        pytest.param(
+            LOG_UNSCORED,
+            "overwrite",
+            [("match", dict[str, Any]())],
+            {"match": {"num_metrics": 2}},
+            None,
+            id="unscored-overwrite",
+        ),
+        pytest.param(
+            LOG_UNSCORED,
+            "append",
+            [("f1", {"stop_words": ["roasted"]})],
+            {"f1": {"num_metrics": 2, "stop_words": ["roasted"]}},
+            None,
+            id="unscored-append",
+        ),
+        pytest.param(
+            LOG_SCORED,
+            "append",
+            [("f1", {"stop_words": ["woah"]})],
+            {
+                "f1": {"num_metrics": 2, "stop_words": ["woah"]},
+                "match": {"num_metrics": 2},
+            },
+            None,
+            id="scored-append",
+        ),
+        pytest.param(
+            LOG_SCORED,
+            "overwrite",
+            [("f1", {"stop_words": ["clowns"]})],
+            {"f1": {"num_metrics": 2, "stop_words": ["clowns"]}},
+            None,
+            id="scored-overwrite",
+        ),
+        pytest.param(
+            LOG_SCORED,
+            "append",
+            [("f1", dict[str, Any]()), ("choice", dict[str, Any]())],
+            {
+                "f1": {"num_metrics": 2},
+                "choice": {"num_metrics": 2},
+                "match": {"num_metrics": 2},
+            },
+            None,
+            id="multiple-scorers",
+        ),
+        pytest.param(
+            LOG_SCORED,
+            "append",
+            [("adds_to_state", dict[str, Any]())],
+            None,
+            pytest.raises(RuntimeError, match="modified state.scores"),
+            id="scored-append-with-state-score",
+        ),
+    ],
+)
+@pytest.mark.anyio
+@skip_if_no_openai
+async def test_score(
+    log_file: pathlib.Path,
+    action: ScoreAction | None,
+    scorers_unresolved: list[tuple[str, dict[str, Any]]],
+    expected_scores: dict[str, dict[str, int]] | None,
+    expected_error: contextlib.AbstractContextManager[Any] | None,
+):
+    unscored_log = await read_eval_log_async(log_file)
+    assert unscored_log.samples is not None
+    assert len(unscored_log.samples) > 0
+
+    mock_scorers: list[Scorer] = []
+    seen_scores: dict[tuple[int | str, str], dict[str, Score]] = {}
+    for scorer_unresolved in scorers_unresolved:
+        for scorer_fn in resolve_scorers(
+            unscored_log, scorer_unresolved[0], scorer_unresolved[1]
+        ):
+
+            @functools.wraps(scorer_fn)
+            async def scorer_wrapped(
+                state: TaskState,
+                target: Target,
+                scorer_name: str = scorer_unresolved[0],
+                scorer_fn: Scorer = scorer_fn,
+            ) -> Score:
+                seen_scores[state.sample_id, scorer_name] = (state.scores or {}).copy()
+                return await scorer_fn(state, target)
+
+            mock_scorers.append(scorer_wrapped)
+
+    with (
+        expected_error if expected_error is not None else contextlib.nullcontext()
+    ) as exc_info:
+        scored_log = await score_async(
+            log=unscored_log, scorers=mock_scorers, action=action
+        )
+
+    if exc_info is not None:
+        return
+
+    assert scored_log.results is not None
+    scores = {score.name: score for score in scored_log.results.scores}
+    assert [*scores] == [*(expected_scores or {})]
+    for score_name, expected_score in (expected_scores or {}).items():
+        assert len(scores[score_name].metrics.items()) == expected_score["num_metrics"]
+        if expected_stop_words := expected_score.get("stop_words"):
+            assert scores[score_name].params["stop_words"] == expected_stop_words
+
+    scored_samples = {sample.id: sample for sample in scored_log.samples or []}
+    assert len(scored_samples) == len(unscored_log.samples)
+    for unscored_sample in unscored_log.samples:
+        scored_sample = scored_samples[unscored_sample.id]
+        assert scored_sample.scores is not None
+        for idx_scorer, (scorer_name, _) in enumerate(scorers_unresolved):
+            scores_passed_to_scorer = seen_scores[unscored_sample.id, scorer_name]
+            expected_scores_passed_to_scorer = (
+                (unscored_sample.scores or {}) if action == "append" else {}
+            )
+            if idx_scorer > 0:
+                expected_scores_passed_to_scorer.update(
+                    {
+                        scorer_name: scored_sample.scores[scorer_name]
+                        for scorer_name, _ in scorers_unresolved[:idx_scorer]
+                    }
+                )
+            assert scores_passed_to_scorer == expected_scores_passed_to_scorer

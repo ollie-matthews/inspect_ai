@@ -5,6 +5,7 @@ from typing import Any, Literal, NamedTuple, Set, cast
 import rich
 from pydantic_core import to_json
 from rich.status import Status
+from shortuuid import uuid
 from tenacity import (
     RetryCallState,
     Retrying,
@@ -15,8 +16,9 @@ from tenacity import (
 from typing_extensions import Unpack
 
 from inspect_ai._display import display as display_manager
+from inspect_ai._util._async import run_coroutine
 from inspect_ai._util.error import PrerequisiteError
-from inspect_ai._util.file import basename, filesystem
+from inspect_ai._util.file import basename, file, filesystem
 from inspect_ai._util.notgiven import NOT_GIVEN, NotGiven
 from inspect_ai.agent._agent import Agent
 from inspect_ai.approval._policy import ApprovalPolicy
@@ -29,6 +31,7 @@ from inspect_ai.log._file import (
     read_eval_log_headers,
     write_log_dir_manifest,
 )
+from inspect_ai.log._log import EvalConfig
 from inspect_ai.log._model import model_roles_to_model_roles_config
 from inspect_ai.model import (
     GenerateConfigArgs,
@@ -47,7 +50,7 @@ from .eval import eval, eval_init, eval_resolve_tasks
 from .loader import resolve_task_args
 from .task import Epochs
 from .task.resolved import ResolvedTask
-from .task.task import PreviousTask
+from .task.task import PreviousTask, resolve_epochs
 from .task.tasks import Tasks
 
 logger = logging.getLogger(__name__)
@@ -88,6 +91,7 @@ def eval_set(
     sample_shuffle: bool | int | None = None,
     epochs: int | Epochs | None = None,
     fail_on_error: bool | float | None = None,
+    continue_on_fail: bool | None = None,
     retry_on_error: int | None = None,
     debug_errors: bool | None = None,
     message_limit: int | None = None,
@@ -105,6 +109,7 @@ def eval_set(
     log_shared: bool | int | None = None,
     bundle_dir: str | None = None,
     bundle_overwrite: bool = False,
+    log_dir_allow_dirty: bool | None = None,
     **kwargs: Unpack[GenerateConfigArgs],
 ) -> tuple[bool, list[EvalLog]]:
     r"""Evaluate a set of tasks.
@@ -162,6 +167,8 @@ def eval_set(
             (default); `False` to never fail on sample errors; Value between 0 and 1
             to fail if a proportion of total samples fails. Value greater than 1 to fail
             eval if a count of samples fails.
+        continue_on_fail: `True` to continue running and only fail at the end if the `fail_on_error` condition is met.
+            `False` to fail eval immediately when the `fail_on_error` condition is met (default).
         retry_on_error: Number of times to retry samples if they encounter errors
             (by default, no retries occur).
         debug_errors: Raise task errors (rather than logging them)
@@ -194,14 +201,20 @@ def eval_set(
             by this eval set will be bundled into this directory.
         bundle_overwrite: Whether to overwrite files in the bundle_dir.
             (defaults to False).
+        log_dir_allow_dirty: If True, allow the log directory to contain
+            unrelated logs. If False, ensure that the log directory only contains logs
+            for tasks in this eval set (defaults to False).
         **kwargs: Model generation options.
 
     Returns:
         A tuple of bool (whether all tasks completed successfully) and a list of `EvalLog` headers (i.e. raw sample data is not included in the logs returned).
     """
+    from inspect_ai.hooks._hooks import emit_eval_set_end, emit_eval_set_start
 
     # helper function to run a set of evals
-    def run_eval(tasks: list[ResolvedTask] | list[PreviousTask]) -> list[EvalLog]:
+    def run_eval(
+        eval_set_id: str, tasks: list[ResolvedTask] | list[PreviousTask]
+    ) -> list[EvalLog]:
         # run evals
         results = eval(
             tasks=tasks,
@@ -227,6 +240,7 @@ def eval_set(
             sample_shuffle=sample_shuffle,
             epochs=epochs,
             fail_on_error=fail_on_error,
+            continue_on_fail=continue_on_fail,
             retry_on_error=retry_on_error,
             debug_errors=debug_errors,
             message_limit=message_limit,
@@ -244,6 +258,7 @@ def eval_set(
             log_shared=log_shared,
             log_header_only=True,
             score=score,
+            eval_set_id=eval_set_id,
             **kwargs,
         )
 
@@ -281,11 +296,15 @@ def eval_set(
     fs = filesystem(log_dir)
     fs.mkdir(log_dir, exist_ok=True)
 
+    # get eval set id
+    eval_set_id = eval_set_id_for_log_dir(log_dir)
+
     # resolve some parameters
     retry_connections = retry_connections or 1.0
     retry_cleanup = retry_cleanup is not False
     max_connections = starting_max_connections(models, GenerateConfig(**kwargs))
     max_tasks = max_tasks if max_tasks is not None else max(len(models), 4)
+    log_dir_allow_dirty = log_dir_allow_dirty is True
 
     # prepare console/status
     console = rich.get_console()
@@ -344,7 +363,9 @@ def eval_set(
         # validate that:
         #  (1) All tasks have a unique identifier
         #  (2) All logs have identifiers that map to tasks
-        validate_eval_set_prerequisites(resolved_tasks, all_logs)
+        all_logs = validate_eval_set_prerequisites(
+            resolved_tasks, all_logs, log_dir_allow_dirty
+        )
 
         # see which tasks are yet to run (to complete successfully we need
         # a successful eval for every [task_file/]task_name/model combination)
@@ -358,7 +379,7 @@ def eval_set(
         # we have some pending tasks yet to run, run them
         if len(pending_tasks) > 0:
             # run the tasks
-            run_logs = run_eval(pending_tasks)
+            run_logs = run_eval(eval_set_id, pending_tasks)
 
             # if this was the entire list of resolved tasks, return results
             if len(pending_tasks) == len(all_tasks):
@@ -373,7 +394,9 @@ def eval_set(
         # all tasks have had an initial run, perform retries
         else:
             # look for retryable eval logs and cleave them into success/failed
-            success_logs, failed_logs = list_latest_eval_logs(all_logs, retry_cleanup)
+            success_logs, failed_logs = list_latest_eval_logs(
+                all_logs, epochs, retry_cleanup
+            )
 
             # retry the failed logs (look them up in resolved_tasks)
             if len(failed_logs) > 0:
@@ -387,7 +410,8 @@ def eval_set(
 
                 # run previous tasks (no models passed b/c previous task already carries its model)
                 retried_logs = run_eval(
-                    tasks=as_previous_tasks(failed_tasks, failed_logs)
+                    eval_set_id=eval_set_id,
+                    tasks=as_previous_tasks(failed_tasks, failed_logs),
                 )
 
                 # return success
@@ -408,12 +432,16 @@ def eval_set(
         before=before,
     )
 
+    # emit start event
+    run_coroutine(emit_eval_set_start(eval_set_id, log_dir))
+
     # execute w/ retry
     results = retry(try_eval)
 
     # final sweep to remove failed log files
     if retry_cleanup:
-        cleanup_older_eval_logs(log_dir)
+        task_ids = {result.eval.task_id for result in results}
+        cleanup_older_eval_logs(log_dir, task_ids)
 
     # report final status
     success = all_evals_succeeded(results)
@@ -426,8 +454,25 @@ def eval_set(
     # update manifest
     write_log_dir_manifest(log_dir)
 
+    # emit end event
+    run_coroutine(emit_eval_set_end(eval_set_id, log_dir))
+
     # return status + results
     return success, results
+
+
+def eval_set_id_for_log_dir(log_dir: str) -> str:
+    EVAL_SET_ID_FILE = ".eval-set-id"
+    fs = filesystem(log_dir)
+    eval_set_id_file = f"{log_dir}{fs.sep}{EVAL_SET_ID_FILE}"
+    if fs.exists(eval_set_id_file):
+        with file(eval_set_id_file, "r") as f:
+            return f.read().strip()
+    else:
+        eval_set_id = uuid()
+        with file(eval_set_id_file, "w") as f:
+            f.write(eval_set_id)
+        return eval_set_id
 
 
 # convert resolved tasks to previous tasks
@@ -493,21 +538,57 @@ def list_all_eval_logs(log_dir: str) -> list[Log]:
 
 # get the latest logs (cleaning if requested). returns tuple of successful/unsuccessful
 def list_latest_eval_logs(
-    logs: list[Log], cleanup_older: bool
+    logs: list[Log], epochs: int | Epochs | None, cleanup_older: bool
 ) -> tuple[list[Log], list[Log]]:
     latest_logs = latest_completed_task_eval_logs(
         logs=logs, cleanup_older=cleanup_older
     )
-    success_logs = [log for log in latest_logs if log.header.status == "success"]
-    failed_logs = [log for log in latest_logs if log.header.status != "success"]
-    return (success_logs, failed_logs)
+
+    # resolve epochs
+    epochs = resolve_epochs(epochs)
+
+    # figure out which logs still need work
+    complete_logs: list[Log] = []
+    incomplete_logs: list[Log] = []
+    for log in latest_logs:
+        if epochs_changed(epochs, log.header.eval.config):
+            incomplete_logs.append(log)
+        elif log.header.status != "success":
+            incomplete_logs.append(log)
+        else:
+            complete_logs.append(log)
+
+    return (complete_logs, incomplete_logs)
+
+
+def epochs_changed(epochs: Epochs | None, config: EvalConfig) -> bool:
+    # user didn't say anything about epochs on subsequent call (not changed)
+    if epochs is None:
+        return False
+    # user did specify epochs and previous call had no epochs config (changed)
+    elif config.epochs is None:
+        return True
+    # number of epochs differs (changed)
+    elif epochs.epochs != config.epochs:
+        return True
+    # different reducer list (changed)
+    elif [r.__name__ for r in (epochs.reducer or [])] != [
+        r for r in (config.epochs_reducer or [])
+    ]:
+        return True
+    # fall through (not changed)
+    else:
+        return False
 
 
 # cleanup logs that aren't the latest
-def cleanup_older_eval_logs(log_dir: str) -> None:
-    latest_completed_task_eval_logs(
-        logs=list_all_eval_logs(log_dir), cleanup_older=True
-    )
+def cleanup_older_eval_logs(log_dir: str, task_ids: set[str]) -> None:
+    logs = [
+        log
+        for log in list_all_eval_logs(log_dir)
+        if log.header.eval.task_id in task_ids
+    ]
+    latest_completed_task_eval_logs(logs=logs, cleanup_older=True)
 
 
 def latest_completed_task_eval_logs(
@@ -555,8 +636,10 @@ def latest_completed_task_eval_logs(
 #  (2) all log files have identifiers that map to tasks (so we know we
 #      are running in a log dir created for this eval_set)
 def validate_eval_set_prerequisites(
-    resolved_tasks: list[ResolvedTask], all_logs: list[Log]
-) -> None:
+    resolved_tasks: list[ResolvedTask],
+    all_logs: list[Log],
+    log_dir_allow_dirty: bool,
+) -> list[Log]:
     # do all resolved tasks have unique identfiers?
     task_identifiers: Set[str] = set()
     for task in resolved_tasks:
@@ -569,13 +652,18 @@ def validate_eval_set_prerequisites(
             task_identifiers.add(identifier)
 
     # do all logs in the log directory correspond to task identifiers?
-    for log in all_logs:
-        if log.task_identifier not in task_identifiers:
-            raise PrerequisiteError(
-                f"[bold]ERROR[/bold]: Existing log file '{basename(log.info.name)}' in log_dir is not "
-                + "associated with a task passed to eval_set (you must run eval_set "
-                + "in a fresh log directory)"
-            )
+    if log_dir_allow_dirty:
+        return [log for log in all_logs if log.task_identifier in task_identifiers]
+    else:
+        for log in all_logs:
+            if log.task_identifier not in task_identifiers:
+                raise PrerequisiteError(
+                    f"[bold]ERROR[/bold]: Existing log file '{basename(log.info.name)}' in log_dir is not "
+                    + "associated with a task passed to eval_set (you must run eval_set "
+                    + "in a fresh log directory). You can use the `--log-dir-allow-dirty` option to allow "
+                    + "logs from other eval sets to be present in the log directory."
+                )
+        return all_logs
 
 
 # yield a unique identifier for a task (used to pair resolved tasks to log files)

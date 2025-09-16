@@ -9,7 +9,6 @@ from typing import (
     Literal,
     Sequence,
     Type,
-    TypeAlias,
     TypeVar,
     Union,
 )
@@ -205,9 +204,6 @@ class ToolEvent(BaseEvent):
 
     arguments: dict[str, JsonValue]
     """Arguments to function."""
-
-    internal: JsonValue | None = Field(default=None)
-    """Model provider specific payload - typically used to aid transformation back to model types."""
 
     view: ToolCallContent | None = Field(default=None)
     """Custom view of tool call input."""
@@ -515,25 +511,25 @@ class SubtaskEvent(BaseEvent):
         return dt.astimezone().isoformat()
 
 
-Event: TypeAlias = Union[
-    SampleInitEvent
-    | SampleLimitEvent
-    | SandboxEvent
-    | StateEvent
-    | StoreEvent
-    | ModelEvent
-    | ToolEvent
-    | SandboxEvent
-    | ApprovalEvent
-    | InputEvent
-    | ScoreEvent
-    | ErrorEvent
-    | LoggerEvent
-    | InfoEvent
-    | SpanBeginEvent
-    | SpanEndEvent
-    | StepEvent
-    | SubtaskEvent,
+Event = Union[
+    SampleInitEvent,
+    SampleLimitEvent,
+    SandboxEvent,
+    StateEvent,
+    StoreEvent,
+    ModelEvent,
+    ToolEvent,
+    SandboxEvent,
+    ApprovalEvent,
+    InputEvent,
+    ScoreEvent,
+    ErrorEvent,
+    LoggerEvent,
+    InfoEvent,
+    SpanBeginEvent,
+    SpanEndEvent,
+    StepEvent,
+    SubtaskEvent,
 ]
 """Event in a transcript."""
 

@@ -3,11 +3,13 @@ import { FC, RefObject, useCallback, useMemo } from "react";
 import { RenderedEventNode } from "./TranscriptVirtualList";
 import { EventNode } from "./types";
 
+import { VirtuosoHandle } from "react-virtuoso";
 import { LiveVirtualList } from "../../../components/LiveVirtualList";
 import styles from "./TranscriptVirtualListComponent.module.css";
 
 interface TranscriptVirtualListComponentProps {
   id: string;
+  listHandle: RefObject<VirtuosoHandle | null>;
   eventNodes: EventNode[];
   initialEventId?: string | null;
   offsetTop?: number;
@@ -23,6 +25,7 @@ export const TranscriptVirtualListComponent: FC<
   TranscriptVirtualListComponentProps
 > = ({
   id,
+  listHandle,
   eventNodes,
   scrollRef,
   running,
@@ -39,6 +42,30 @@ export const TranscriptVirtualListComponent: FC<
     });
     return result === -1 ? undefined : result;
   }, [initialEventId, eventNodes]);
+
+  const hasToolEventsAtCurrentDepth = useCallback(
+    (startIndex: number) => {
+      // Walk backwards from this index to see if we see any tool events
+      // at this depth, prior to this event
+      for (let i = startIndex; i >= 0; i--) {
+        const node = eventNodes[i];
+        if (node.event.event === "tool") {
+          return true;
+        }
+        if (node.depth < eventNodes[startIndex].depth) {
+          return false;
+        }
+      }
+      return false;
+    },
+    [eventNodes],
+  );
+
+  const contextWithToolEvents = useMemo(() => ({ hasToolEvents: true }), []);
+  const contextWithoutToolEvents = useMemo(
+    () => ({ hasToolEvents: false }),
+    [],
+  );
 
   const renderRow = useCallback(
     (index: number, item: EventNode) => {
@@ -64,6 +91,11 @@ export const TranscriptVirtualListComponent: FC<
         ? styles.attachedParent
         : undefined;
 
+      const hasToolEvents = hasToolEventsAtCurrentDepth(index);
+      const context = hasToolEvents
+        ? contextWithToolEvents
+        : contextWithoutToolEvents;
+
       return (
         <div
           id={item.id}
@@ -78,15 +110,22 @@ export const TranscriptVirtualListComponent: FC<
             node={item}
             next={next}
             className={clsx(attachedParentClass, attachedChildClass)}
+            context={context}
           />
         </div>
       );
     },
-    [eventNodes],
+    [
+      eventNodes,
+      hasToolEventsAtCurrentDepth,
+      contextWithToolEvents,
+      contextWithoutToolEvents,
+    ],
   );
 
   return (
     <LiveVirtualList<EventNode>
+      listHandle={listHandle}
       className={className}
       id={id}
       scrollRef={scrollRef}

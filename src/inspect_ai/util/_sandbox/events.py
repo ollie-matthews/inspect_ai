@@ -1,4 +1,5 @@
 import contextlib
+import inspect
 import shlex
 from datetime import datetime
 from typing import Any, Iterator, Literal, Type, Union, overload
@@ -16,6 +17,7 @@ from .environment import (
     SandboxEnvironment,
     SandboxEnvironmentConfigType,
 )
+from .service import SERVICES_DIR
 
 
 class SandboxEnvironmentProxy(SandboxEnvironment):
@@ -33,16 +35,34 @@ class SandboxEnvironmentProxy(SandboxEnvironment):
         user: str | None = None,
         timeout: int | None = None,
         timeout_retry: bool = True,
+        concurrency: bool = True,
     ) -> ExecResult[str]:
         from inspect_ai.log._transcript import SandboxEvent, transcript
 
         # started
         timestamp = datetime.now()
 
-        # make call
-        result = await self._sandbox.exec(
-            cmd, input, cwd, env, user, timeout, timeout_retry
+        # check how many parameters the target sandbox method has
+        # (if only 7 then don't send concurrency param)
+        sig = inspect.signature(self._sandbox.exec)
+        params: dict[str, Any] = dict(
+            cmd=cmd,
+            input=input,
+            cwd=cwd,
+            env=env,
+            user=user,
+            timeout=timeout,
+            timeout_retry=timeout_retry,
         )
+        if len(sig.parameters) == 8:
+            params["concurrency"] = concurrency
+
+        # make call
+        result = await self._sandbox.exec(**params)
+
+        # skip sandbox service events
+        if any(SERVICES_DIR in c for c in cmd):
+            return result
 
         # yield event
         options: dict[str, JsonValue] = {}
@@ -145,6 +165,10 @@ class SandboxEnvironmentProxy(SandboxEnvironment):
             raise TypeError(
                 f"Expected instance of {sandbox_cls.__name__}, got {type(self._sandbox).__name__}"
             )
+
+    @override
+    def default_polling_interval(self) -> float:
+        return self._sandbox.default_polling_interval()
 
     @contextlib.contextmanager
     def no_events(self) -> Iterator[None]:

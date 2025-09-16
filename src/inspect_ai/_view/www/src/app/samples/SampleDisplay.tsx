@@ -50,17 +50,24 @@ import { messagesFromEvents } from "./chat/messages";
 import styles from "./SampleDisplay.module.css";
 import { SampleSummaryView } from "./SampleSummaryView";
 import { SampleScoresView } from "./scores/SampleScoresView";
+import { useTranscriptFilter } from "./transcript/hooks";
+import { TranscriptFilterPopover } from "./transcript/TranscriptFilter";
 import { TranscriptPanel } from "./transcript/TranscriptPanel";
 
 interface SampleDisplayProps {
   id: string;
   scrollRef: RefObject<HTMLDivElement | null>;
+  focusOnLoad?: boolean;
 }
 
 /**
  * Component to display a sample with relevant context and visibility control.
  */
-export const SampleDisplay: FC<SampleDisplayProps> = ({ id, scrollRef }) => {
+export const SampleDisplay: FC<SampleDisplayProps> = ({
+  id,
+  scrollRef,
+  focusOnLoad,
+}) => {
   // Tab ids
   const baseId = `sample-dialog`;
   const filteredSamples = useFilteredSamples();
@@ -128,6 +135,15 @@ export const SampleDisplay: FC<SampleDisplayProps> = ({ id, scrollRef }) => {
     epoch: urlEpoch,
   } = useLogRouteParams();
 
+  // Focus the panel when it loads
+  useEffect(() => {
+    setTimeout(() => {
+      if (focusOnLoad) {
+        scrollRef.current?.focus();
+      }
+    }, 10);
+  }, []);
+
   // Tab selection
   const onSelectedTab = useCallback(
     (e: MouseEvent<HTMLElement>) => {
@@ -153,11 +169,61 @@ export const SampleDisplay: FC<SampleDisplayProps> = ({ id, scrollRef }) => {
   const tabsetId = `task-sample-details-tab-${id}`;
   const targetId = `${tabsetId}-content`;
 
+  const isShowing = useStore((state) => state.app.dialogs.transcriptFilter);
+  const setShowing = useStore(
+    (state) => state.appActions.setShowingTranscriptFilterDialog,
+  );
+
+  const displayMode = useStore((state) => state.app.displayMode);
+  const setDisplayMode = useStore((state) => state.appActions.setDisplayMode);
+
+  const filterRef = useRef<HTMLButtonElement | null>(null);
+  const optionsRef = useRef<HTMLButtonElement | null>(null);
+
   const handlePrintClick = useCallback(() => {
     printSample(id, targetId);
   }, [printSample, id, targetId]);
 
+  const toggleFilter = useCallback(() => {
+    setShowing(!isShowing);
+  }, [setShowing, isShowing]);
+
+  const toggleDisplayMode = useCallback(() => {
+    setDisplayMode(displayMode === "rendered" ? "raw" : "rendered");
+  }, [displayMode, setDisplayMode]);
+
+  const { isDebugFilter, isDefaultFilter } = useTranscriptFilter();
+
   const tools = [];
+  if (selectedTab === kSampleTranscriptTabId) {
+    const label = isDebugFilter
+      ? "Debug"
+      : isDefaultFilter
+        ? "Default"
+        : "Custom";
+
+    tools.push(
+      <ToolButton
+        key="sample-filter-transcript"
+        label={`Events: ${label}`}
+        icon={ApplicationIcons.filter}
+        onClick={toggleFilter}
+        ref={filterRef}
+      />,
+    );
+  }
+
+  tools.push(
+    <ToolButton
+      key="options-button"
+      label={"Raw"}
+      icon={ApplicationIcons.display}
+      onClick={toggleDisplayMode}
+      ref={optionsRef}
+      latched={displayMode === "raw"}
+    />,
+  );
+
   if (!isVscode()) {
     tools.push(
       <ToolButton
@@ -201,6 +267,12 @@ export const SampleDisplay: FC<SampleDisplayProps> = ({ id, scrollRef }) => {
           }
           scrollable={false}
         >
+          <TranscriptFilterPopover
+            showing={isShowing}
+            setShowing={setShowing}
+            positionEl={filterRef.current}
+          />
+
           <TranscriptPanel
             key={`${baseId}-transcript-display-${id}`}
             id={`${baseId}-transcript-display-${id}`}
@@ -315,7 +387,7 @@ export const SampleDisplay: FC<SampleDisplayProps> = ({ id, scrollRef }) => {
         >
           {!sample ? (
             <NoContentsPanel text="JSON not available" />
-          ) : estimateSize(sample.events) > 250000 ? (
+          ) : estimateSize(sample.events) > 25 * 1024 * 1024 ? (
             <NoContentsPanel text="JSON too large to display" />
           ) : (
             <div className={clsx(styles.padded, styles.fullWidth)}>

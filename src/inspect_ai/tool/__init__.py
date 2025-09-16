@@ -20,6 +20,9 @@ from inspect_ai._util.deprecation import relocated_module_attribute
 
 from ._mcp import (
     MCPServer,
+    MCPServerConfig,
+    MCPServerConfigHTTP,
+    MCPServerConfigStdio,
     mcp_connection,
     mcp_server_http,
     mcp_server_sandbox,
@@ -47,7 +50,7 @@ from ._tools._execute import bash, python
 from ._tools._text_editor import text_editor
 from ._tools._think import think
 from ._tools._web_browser import web_browser
-from ._tools._web_search import web_search
+from ._tools._web_search import WebSearchProviders, web_search
 
 __all__ = [
     "bash",
@@ -56,6 +59,7 @@ __all__ = [
     "python",
     "web_browser",
     "web_search",
+    "WebSearchProviders",
     "think",
     "text_editor",
     "tool",
@@ -72,6 +76,9 @@ __all__ = [
     "mcp_server_http",
     "mcp_server_sandbox",
     "MCPServer",
+    "MCPServerConfig",
+    "MCPServerConfigHTTP",
+    "MCPServerConfigStdio",
     "Content",
     "ContentAudio",
     "ContentData",

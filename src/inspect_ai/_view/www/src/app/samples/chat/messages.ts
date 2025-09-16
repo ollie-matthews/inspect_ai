@@ -17,7 +17,11 @@ import {
 import { ApplicationIcons } from "../../appearance/icons";
 
 export interface ResolvedMessage {
-  message: ChatMessageAssistant | ChatMessageSystem | ChatMessageUser;
+  message:
+    | ChatMessageAssistant
+    | ChatMessageSystem
+    | ChatMessageUser
+    | ChatMessageTool;
   toolMessages: ChatMessageTool[];
 }
 
@@ -83,7 +87,6 @@ export const resolveMessages = (messages: Messages) => {
     role: "system",
     content: systemContent,
     source: "input",
-    internal: null,
     metadata: null,
   };
 

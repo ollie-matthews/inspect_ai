@@ -1,7 +1,5 @@
-import base64
 import functools
 import json
-import re
 import socket
 from copy import copy
 from typing import Any, Literal
@@ -58,6 +56,11 @@ from inspect_ai._util.images import file_as_data_uri
 from inspect_ai._util.url import is_http_url
 from inspect_ai.model._call_tools import parse_tool_call
 from inspect_ai.model._generate_config import GenerateConfig
+from inspect_ai.model._internal import (
+    CONTENT_INTERNAL_TAG,
+    content_internal_tag,
+    parse_content_with_internal,
+)
 from inspect_ai.model._model_output import ChatCompletionChoice, Logprobs
 from inspect_ai.model._reasoning import parse_content_with_reasoning
 from inspect_ai.tool import ToolCall, ToolChoice, ToolFunction, ToolInfo
@@ -203,15 +206,6 @@ async def messages_to_openai(
 ) -> list[ChatCompletionMessageParam]:
     """Convert messages to OpenAI Completions API compatible messages.
 
-    ::: callout-note
-    The `message_to_openai()` function is available only in the development version of Inspect. To install the development version from GitHub:
-
-    ``` bash
-    pip install git+https://github.com/UKGovernmentBEIS/inspect_ai
-    ```
-    :::
-
-
     Args:
        messages: List of messages to convert
        system_role: Role to use for system messages (newer OpenAI models use "developer" rather than "system").
@@ -265,10 +259,6 @@ def openai_completion_params(
     return params
 
 
-INTERNAL_TAG = "internal"
-CONTENT_INTERNAL_TAG = "content-internal"
-
-
 def openai_assistant_content(message: ChatMessageAssistant) -> str:
     # In agent bridge scenarios, we could encounter concepts such as reasoning and
     # .internal use in the ChatMessageAssistant that are not supported by the OpenAI
@@ -290,14 +280,8 @@ def openai_assistant_content(message: ChatMessageAssistant) -> str:
             elif c.type == "text":
                 content = f"{content}\n{c.text}"
                 if c.internal is not None:
-                    content = f"{content}\n<{CONTENT_INTERNAL_TAG}>{base64.b64encode(json.dumps(c.internal).encode('utf-8')).decode('utf-8')}</{CONTENT_INTERNAL_TAG}>"
+                    content = f"{content}\n<{content_internal_tag(c.internal)}>\n"
 
-    if message.internal:
-        content = f"""{content}\n<{INTERNAL_TAG}>{
-            base64.b64encode(json.dumps(message.internal).encode("utf-8")).decode(
-                "utf-8"
-            )
-        }</{INTERNAL_TAG}>\n"""
     return content
 
 
@@ -394,14 +378,6 @@ async def messages_from_openai(
 ) -> list[ChatMessage]:
     """Convert OpenAI Completions API messages into Inspect messages.
 
-    ::: callout-note
-    The `messages_from_openai()` function is available only in the development version of Inspect. To install the development version from GitHub:
-
-    ``` bash
-    pip install git+https://github.com/UKGovernmentBEIS/inspect_ai
-    ```
-    :::
-
     Args:
         messages: OpenAI Completions API Messages
         model: Optional model name to tag assistant messages with.
@@ -437,20 +413,12 @@ async def messages_from_openai(
         elif message["role"] == "assistant":
             # resolve content
             refusal: Literal[True] | None = None
-            internal: JsonValue | None = None
             asst_content = message.get("content", None)
             if isinstance(asst_content, str):
-                # Even though the choices API doesn't take advantage of .internal,
-                # we could be transforming from OpenAI choices to Inspect for agent
-                # bridge scenarios where a different model (that does use .internal)
-                # is the actual model being used.
-                asst_content, internal = _parse_content_with_internal(
-                    asst_content, INTERNAL_TAG
-                )
                 asst_content, smuggled_reasoning = parse_content_with_reasoning(
                     asst_content
                 )
-                asst_content, content_internal = _parse_content_with_internal(
+                asst_content, content_internal = parse_content_with_internal(
                     asst_content, CONTENT_INTERNAL_TAG
                 )
                 if smuggled_reasoning:
@@ -505,7 +473,6 @@ async def messages_from_openai(
                     tool_calls=tool_calls or None,
                     model=model,
                     source="generate",
-                    internal=internal,
                 )
             )
         elif message["role"] == "tool":
@@ -516,8 +483,7 @@ async def messages_from_openai(
                 # of it to support agent bridge scenarios. We have to strip that
                 # data. To be clear, if it's <think>, we'll strip the <think> tag,
                 # but the reasoning summary itself will remain in the content.
-                content, _ = _parse_content_with_internal(tool_content, INTERNAL_TAG)
-                content, _ = parse_content_with_reasoning(content)
+                content, _ = parse_content_with_reasoning(tool_content)
             else:
                 content = []
                 for tc in tool_content:
@@ -588,9 +554,7 @@ def content_from_openai(
         content["type"] = list(content.keys())[0]  # type: ignore[arg-type]
     if content["type"] == "text":
         text = content["text"]
-        text, content_internal = _parse_content_with_internal(
-            text, CONTENT_INTERNAL_TAG
-        )
+        text, content_internal = parse_content_with_internal(text, CONTENT_INTERNAL_TAG)
         if parse_reasoning:
             content_text, reasoning = parse_content_with_reasoning(text)
             if reasoning:
@@ -796,41 +760,3 @@ class OpenAIAsyncHttpxClient(httpx.AsyncClient):
         )
 
         super().__init__(**kwargs)
-
-
-def _parse_content_with_internal(
-    content: str, tag: str
-) -> tuple[str, JsonValue | None]:
-    """
-    Extracts and removes a smuggled <internal>...</internal> tag from the content string, if present.
-
-    Note:
-        This OpenAI model does not natively use `.internal`. However, in bridge
-        scenarios—where output from a model that does use `.internal` is routed
-        through this code—such a tag may be present and should be handled.
-
-    Args:
-        content: The input string, possibly containing an <internal> tag with
-        base64-encoded JSON.
-        tag: The name of the tag for internal data (e.g. <internal>)
-
-    Returns:
-        tuple[str, JsonValue | None]:
-            - The content string with the <internal>...</internal> tag removed (if present), otherwise the original string.
-            - The decoded and parsed internal value (if present), otherwise None.
-
-    Raises:
-        json.JSONDecodeError: If the content of the <internal> tag is not valid JSON after decoding.
-        UnicodeDecodeError: If the content of the <internal> tag is not valid UTF-8 after base64 decoding.
-    """
-    internal_pattern = rf"<{tag}>(.*?)</{tag}>"
-    internal_match = re.search(rf"<{tag}>(.*?)</{tag}>", content, re.DOTALL)
-
-    return (
-        (
-            re.sub(internal_pattern, "", content, flags=re.DOTALL).strip(),
-            json.loads(base64.b64decode(internal_match.group(1)).decode("utf-8")),
-        )
-        if internal_match
-        else (content, None)
-    )

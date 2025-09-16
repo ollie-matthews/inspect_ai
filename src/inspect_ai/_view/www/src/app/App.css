@@ -65,7 +65,7 @@ a:hover {
 }
 
 .modal {
-  --bs-modal-margin: 0.5rem;
+  --bs-modal-margin: 0.25rem;
 }
 
 .modal-backdrop {
@@ -625,10 +625,10 @@ pre[class*="language-"] {
 .markdown-content h4,
 .markdown-content h5,
 .markdown-content h6 {
-  font-size: 1.3em;
+  font-size: 0.9em;
   font-weight: 600;
   margin-top: 0.25em;
-  margin-bottom: 0.75em;
+  margin-bottom: 0.25em;
 }
 
 .sample-answer .markdown-content h1,
@@ -1206,4 +1206,14 @@ pre[class*="language-"] {
   vertical-align: middle;
   mask: url("../img/inspect-home.svg") no-repeat center / contain;
   -webkit-mask: url("../img/inspect-home.svg") no-repeat center / contain;
+}
+
+/* Use this very carefully, find relies upon checking the 
+document selection to determine if it should skip a find match
+so disabling selection can break that functionality */
+.hideSelection {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }

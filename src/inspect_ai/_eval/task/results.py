@@ -69,7 +69,6 @@ def eval_results(
     scores: list[dict[str, SampleScore]],
     reducers: ScoreReducer | list[ScoreReducer] | None,
     scorers: list[Scorer] | None,
-    metrics: list[Metric] | dict[str, list[Metric]] | None,
 ) -> Tuple[EvalResults, list[EvalSampleReductions] | None]:
     # initialise results
     results = EvalResults(total_samples=samples, completed_samples=len(scores))
@@ -102,69 +101,46 @@ def eval_results(
 
             # Group the scores by sample_id
             reducers, use_reducer_name = resolve_reducer(reducers)
-            for reducer in reducers:
-                reducer_display_nm = (
-                    reducer_log_name(reducer) if use_reducer_name else None
+            if len(reducers) == 0:
+                # Compute metrics without reduction since no reducers were
+                # explicitly specified
+                eval_scores = compute_eval_scores(
+                    resolved_scores,
+                    scorer_info.metrics,
+                    scorer_name,
+                    scorer_info,
+                    None,
                 )
-                reduced_scores = reduce_scores(resolved_scores, reducer=reducer)
+                result_scores.extend(eval_scores)
 
-                # record this scorer's intermediate results
-                reduced_samples = EvalSampleReductions(
-                    scorer=scorer_name,
-                    reducer=reducer_display_nm,
-                    samples=[
-                        EvalSampleScore(**ss.score.__dict__, sample_id=ss.sample_id)
-                        for ss in reduced_scores
-                    ],
-                )
-                sample_reductions.append(reduced_samples)
+            else:
+                for reducer in reducers:
+                    reducer_display_nm = (
+                        reducer_log_name(reducer) if use_reducer_name else None
+                    )
+                    reduced_scores = reduce_scores(resolved_scores, reducer=reducer)
 
-                # Compute metrics for this scorer
-                targets = metrics if metrics is not None else scorer_info.metrics
-                if isinstance(targets, list):
-                    ## split the metrics into the simple metrics and any dictionary
-                    ## metrics, to be processed independently
-                    simple_metrics, dict_metrics = split_metrics(
-                        cast(list[Metric | dict[str, list[Metric]]], targets)
+                    # record this scorer's intermediate results
+                    reduced_samples = EvalSampleReductions(
+                        scorer=scorer_name,
+                        reducer=reducer_display_nm,
+                        samples=[
+                            EvalSampleScore(**ss.score.__dict__, sample_id=ss.sample_id)
+                            for ss in reduced_scores
+                        ],
                     )
+                    sample_reductions.append(reduced_samples)
 
-                    # If there is a simple list of metrics
-                    # just compute the metrics for this scorer
-                    result_scores.extend(
-                        scorer_for_metrics(
-                            scorer_name=scorer_name,
-                            scorer_info=scorer_info,
-                            sample_scores=reduced_scores,
-                            metrics=simple_metrics,
-                            reducer_name=reducer_display_nm,
-                        )
+                    # Compute metrics for this scorer
+                    eval_scores = compute_eval_scores(
+                        reduced_scores,
+                        scorer_info.metrics,
+                        scorer_name,
+                        scorer_info,
+                        reducer_display_nm,
                     )
-                    for dict_metric in dict_metrics:
-                        result_scores.extend(
-                            scorers_from_metric_dict(
-                                scorer_name=scorer_name,
-                                scorer_info=scorer_info,
-                                sample_scores=reduced_scores,
-                                metrics=dict_metric,
-                                reducer_name=reducer_display_nm,
-                            )
-                        )
-                else:
-                    # If there is a dictionary of metrics, apply
-                    # the metrics to the values within the scores
-                    # (corresponding by key) and emit an EvalScorer for
-                    # each key (which effectively creates multiple scorers
-                    # by expanding a dictionary score value into multiple
-                    # results with metrics)
-                    result_scores.extend(
-                        scorers_from_metric_dict(
-                            scorer_name=scorer_name,
-                            scorer_info=scorer_info,
-                            sample_scores=reduced_scores,
-                            metrics=targets,
-                            reducer_name=reducer_display_nm,
-                        )
-                    )
+                    result_scores.extend(eval_scores)
+
             # build results
         results.scores = result_scores
         reductions = sample_reductions
@@ -172,11 +148,76 @@ def eval_results(
     return results, reductions
 
 
+def compute_eval_scores(
+    scores: list[SampleScore],
+    metrics: list[MetricProtocol | MetricDeprecated]
+    | dict[str, list[MetricProtocol | MetricDeprecated]]
+    | list[
+        MetricProtocol
+        | MetricDeprecated
+        | dict[str, list[MetricProtocol | MetricDeprecated]]
+    ],
+    scorer_name: str,
+    scorer_info: ScorerInfo,
+    reducer_display_nm: str | None = None,
+) -> list[EvalScore]:
+    result_scores: list[EvalScore] = []
+    # Compute metrics for this scorer
+    if isinstance(metrics, list):
+        ## split the metrics into the simple metrics and any dictionary
+        ## metrics, to be processed independently
+        simple_metrics, dict_metrics = split_metrics(
+            cast(list[Metric | dict[str, list[Metric]]], metrics)
+        )
+
+        # If there is a simple list of metrics
+        # just compute the metrics for this scorer
+        result_scores.extend(
+            scorer_for_metrics(
+                scorer_name=scorer_name,
+                scorer_info=scorer_info,
+                sample_scores=scores,
+                metrics=simple_metrics,
+                reducer_name=reducer_display_nm,
+            )
+        )
+        for dict_metric in dict_metrics:
+            result_scores.extend(
+                scorers_from_metric_dict(
+                    scorer_name=scorer_name,
+                    scorer_info=scorer_info,
+                    sample_scores=scores,
+                    metrics=dict_metric,
+                    reducer_name=reducer_display_nm,
+                )
+            )
+    else:
+        # If there is a dictionary of metrics, apply
+        # the metrics to the values within the scores
+        # (corresponding by key) and emit an EvalScorer for
+        # each key (which effectively creates multiple scorers
+        # by expanding a dictionary score value into multiple
+        # results with metrics)
+        result_scores.extend(
+            scorers_from_metric_dict(
+                scorer_name=scorer_name,
+                scorer_info=scorer_info,
+                sample_scores=scores,
+                metrics=metrics,
+                reducer_name=reducer_display_nm,
+            )
+        )
+
+    return result_scores
+
+
 def resolve_reducer(
     reducers: ScoreReducer | list[ScoreReducer] | None,
 ) -> tuple[list[ScoreReducer], bool]:
     if reducers is None:
         return ([mean_score()], False)
+    elif isinstance(reducers, list) and len(reducers) == 0:
+        return ([], True)
     else:
         return (reducers if isinstance(reducers, list) else [reducers], True)
 

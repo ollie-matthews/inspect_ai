@@ -1,5 +1,6 @@
 import contextlib
 import functools
+import importlib
 import sys
 import time
 from copy import copy, deepcopy
@@ -76,7 +77,7 @@ from inspect_ai.model import (
 )
 from inspect_ai.model._model import init_sample_model_usage, sample_model_usage
 from inspect_ai.scorer import Scorer, Target
-from inspect_ai.scorer._metric import Metric, SampleScore
+from inspect_ai.scorer._metric import SampleScore
 from inspect_ai.scorer._reducer.types import ScoreReducer
 from inspect_ai.scorer._score import init_scoring_context
 from inspect_ai.scorer._scorer import unique_scorer_name
@@ -100,7 +101,7 @@ from inspect_ai.util._store import init_subtask_store
 
 from ..context import init_task_context
 from ..task import Task
-from .error import SampleErrorHandler
+from .error import SampleErrorHandler, _should_eval_fail
 from .generate import task_generate
 from .images import (
     sample_without_base64_content,
@@ -173,7 +174,10 @@ async def task_run(options: TaskRunOptions) -> EvalLog:
     stats = EvalStats(started_at=iso_now())
 
     # handle sample errors (raise as required)
-    sample_error_handler = SampleErrorHandler(config.fail_on_error, len(task.dataset))
+    sample_error_handler = SampleErrorHandler(
+        config.fail_on_error if config.continue_on_fail is not True else False,
+        len(task.dataset),
+    )
 
     # resolve some config
     model_name = ModelName(model)
@@ -307,7 +311,6 @@ async def task_run(options: TaskRunOptions) -> EvalLog:
                         progress_results,
                         scorers,
                         task.epochs_reducer,
-                        task.metrics,
                     )
 
                 # initial progress
@@ -319,7 +322,6 @@ async def task_run(options: TaskRunOptions) -> EvalLog:
                     progress_results,
                     scorers,
                     task.epochs_reducer,
-                    task.metrics,
                 )
 
                 async def run_sample(
@@ -343,13 +345,15 @@ async def task_run(options: TaskRunOptions) -> EvalLog:
                         sample_error=sample_error_handler,
                         sample_complete=sample_complete,
                         fails_on_error=(
-                            config.fail_on_error is None or config.fail_on_error is True
+                            config.fail_on_error is not False
+                            and config.continue_on_fail is not True
                         ),
                         retry_on_error=config.retry_on_error or 0,
                         error_retries=[],
                         time_limit=config.time_limit,
                         working_limit=config.working_limit,
                         semaphore=sample_semaphore,
+                        eval_set_id=logger.eval.eval_set_id,
                         run_id=logger.eval.run_id,
                         task_id=logger.eval.eval_id,
                     )
@@ -377,14 +381,20 @@ async def task_run(options: TaskRunOptions) -> EvalLog:
                     scores=completed_scores,
                     reducers=task.epochs_reducer,
                     scorers=scorers,
-                    metrics=task.metrics,
                 )
 
             # collect eval data
             collect_eval_data(stats)
 
-            # finish w/ success status
-            eval_log = await logger.log_finish("success", stats, results, reductions)
+            sample_error_count = sum(result is None for result in sample_results)
+            mark_log_as_error = _should_eval_fail(
+                sample_error_count, profile.samples, config.fail_on_error
+            )
+
+            # finish
+            eval_log = await logger.log_finish(
+                "error" if mark_log_as_error else "success", stats, results, reductions
+            )
 
             await emit_task_end(logger, eval_log)
 
@@ -464,7 +474,6 @@ def update_metrics_display_fn(
         list[dict[str, SampleScore]],
         list[Scorer] | None,
         ScoreReducer | list[ScoreReducer] | None,
-        list[Metric] | dict[str, list[Metric]] | None,
     ],
     None,
 ]:
@@ -475,7 +484,6 @@ def update_metrics_display_fn(
         sample_scores: list[dict[str, SampleScore]],
         scorers: list[Scorer] | None,
         reducers: ScoreReducer | list[ScoreReducer] | None,
-        metrics: list[Metric] | dict[str, list[Metric]] | None,
     ) -> None:
         # Don't compute metrics if they are not being displayed
         if not display_metrics:
@@ -490,7 +498,6 @@ def update_metrics_display_fn(
                 scores=sample_scores,
                 reducers=reducers,
                 scorers=scorers,
-                metrics=metrics,
             )
 
             # Name, reducer, value
@@ -541,6 +548,7 @@ async def task_run_sample(
     time_limit: int | None,
     working_limit: int | None,
     semaphore: anyio.Semaphore | None,
+    eval_set_id: str | None,
     run_id: str,
     task_id: str,
 ) -> dict[str, SampleScore] | None:
@@ -598,6 +606,7 @@ async def task_run_sample(
         )
     if scorers:
         init_scoring_context(scorers, Target(sample.target))
+    init_sample_assistant_internal()
 
     # use sandbox if provided
     sandboxenv_cm = (
@@ -709,7 +718,11 @@ async def task_run_sample(
                                 # only emit the sample start once: not on retries
                                 if not error_retries:
                                     await emit_sample_start(
-                                        run_id, task_id, state.uuid, sample_summary
+                                        eval_set_id,
+                                        run_id,
+                                        task_id,
+                                        state.uuid,
+                                        sample_summary,
                                     )
 
                                 # set progress for plan then run it
@@ -822,6 +835,9 @@ async def task_run_sample(
                 scoring_time_limit = time_limit / 2 if time_limit else None
 
                 set_sample_state(state)
+                if state.scores is None:
+                    state.scores = {}
+                solver_score_names = [*state.scores]
 
                 # scoring
                 try:
@@ -831,47 +847,44 @@ async def task_run_sample(
                             async with span(name="scorers"):
                                 for scorer in scorers or []:
                                     scorer_name = unique_scorer_name(
-                                        scorer, list(results.keys())
+                                        scorer, list({*solver_score_names, *results})
                                     )
                                     async with span(name=scorer_name, type="scorer"):
-                                        score_result = (
-                                            await scorer(state, Target(sample.target))
-                                            if scorer
-                                            else None
+                                        if not scorer:
+                                            continue
+                                        score_result = await scorer(
+                                            state, Target(sample.target)
                                         )
-                                        if score_result is not None:
-                                            sample_score = SampleScore(
-                                                score=score_result,
-                                                sample_id=sample.id,
-                                                sample_metadata=sample.metadata,
-                                                scorer=registry_unqualified_name(
-                                                    scorer
-                                                ),
+                                        if scorer_name in state.scores:
+                                            raise RuntimeError(
+                                                f"Scorer {scorer_name} has modified state.scores"
                                             )
-                                            transcript()._event(
-                                                ScoreEvent(
-                                                    score=score_result,
-                                                    target=sample.target,
-                                                )
-                                            )
-                                            results[scorer_name] = sample_score
+                                        state.scores[scorer_name] = score_result
 
-                                # add scores returned by solvers
-                                if state.scores is not None:
-                                    for name, score in state.scores.items():
-                                        results[name] = SampleScore(
-                                            score=score,
-                                            sample_id=state.sample_id,
-                                            sample_metadata=state.metadata,
-                                        )
                                         transcript()._event(
                                             ScoreEvent(
-                                                score=score, target=sample.target
+                                                score=score_result,
+                                                target=sample.target,
                                             )
                                         )
 
-                                # propagate results into scores
-                                state.scores = {k: v.score for k, v in results.items()}
+                                        results[scorer_name] = SampleScore(
+                                            score=score_result,
+                                            sample_id=sample.id,
+                                            sample_metadata=sample.metadata,
+                                            scorer=registry_unqualified_name(scorer),
+                                        )
+
+                                for name in solver_score_names:
+                                    score = state.scores[name]
+                                    transcript()._event(
+                                        ScoreEvent(score=score, target=sample.target)
+                                    )
+                                    results[name] = SampleScore(
+                                        score=score,
+                                        sample_id=state.sample_id,
+                                        sample_metadata=state.metadata,
+                                    )
 
                 except anyio.get_cancelled_exc_class():
                     if active.interrupt_action:
@@ -918,7 +931,7 @@ async def task_run_sample(
                 await log_sample(
                     eval_sample=eval_sample, logger=logger, log_images=log_images
                 )
-            await emit_sample_end(run_id, task_id, state.uuid, eval_sample)
+            await emit_sample_end(eval_set_id, run_id, task_id, state.uuid, eval_sample)
 
     # error that should be retried (we do this outside of the above scope so that we can
     # retry outside of the original semaphore -- our retry will therefore go to the back
@@ -955,6 +968,7 @@ async def task_run_sample(
             time_limit=time_limit,
             working_limit=working_limit,
             semaphore=semaphore,
+            eval_set_id=eval_set_id,
             run_id=run_id,
             task_id=task_id,
         )
@@ -1155,3 +1169,19 @@ def create_sample_semaphore(
 
     # return the semaphore
     return anyio.Semaphore(max_samples)
+
+
+def init_sample_assistant_internal() -> None:
+    if importlib.util.find_spec("openai"):
+        from inspect_ai.model._openai_responses import (
+            init_sample_openai_assistant_internal,
+        )
+
+        init_sample_openai_assistant_internal()
+
+    if importlib.util.find_spec("anthropic"):
+        from inspect_ai.model._providers.anthropic import (
+            init_sample_anthropic_assistant_internal,
+        )
+
+        init_sample_anthropic_assistant_internal()

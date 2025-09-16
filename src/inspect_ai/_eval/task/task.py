@@ -8,9 +8,11 @@ from typing_extensions import TypedDict, Unpack
 from inspect_ai._util.logger import warn_once
 from inspect_ai._util.notgiven import NOT_GIVEN, NotGiven
 from inspect_ai._util.registry import (
+    RegistryInfo,
     is_registry_object,
     registry_info,
     registry_unqualified_name,
+    set_registry_info,
 )
 from inspect_ai.agent._agent import Agent, is_agent
 from inspect_ai.agent._as_solver import as_solver
@@ -63,6 +65,7 @@ class Task:
         approval: str | list[ApprovalPolicy] | None = None,
         epochs: int | Epochs | None = None,
         fail_on_error: bool | float | None = None,
+        continue_on_fail: bool | None = None,
         message_limit: int | None = None,
         token_limit: int | None = None,
         time_limit: int | None = None,
@@ -96,6 +99,8 @@ class Task:
                 (default); `False` to never fail on sample errors; Value between 0 and 1
                 to fail if a proportion of total samples fails. Value greater than 1 to fail
                 eval if a count of samples fails.
+            continue_on_fail: `True` to continue running and only fail at the end if the `fail_on_error` condition is met.
+                `False` to fail eval immediately when the `fail_on_error` condition is met (default).
             message_limit: Limit on total messages used for each sample.
             token_limit: Limit on total tokens used for each sample.
             time_limit: Limit on clock time (in seconds) for samples.
@@ -138,7 +143,7 @@ class Task:
         self.setup = setup
         self.solver = resolve_solver(solver)
         self.cleanup = cleanup
-        self.scorer = resolve_scorer(scorer)
+        self.scorer = resolve_scorer_metrics(resolve_scorer(scorer), metrics)
         self.metrics = metrics
         self.model = resolve_model(model)
         self.config = config
@@ -149,6 +154,7 @@ class Task:
         self.epochs = epochs.epochs if epochs else None
         self.epochs_reducer = epochs.reducer if epochs else None
         self.fail_on_error = fail_on_error
+        self.continue_on_fail = continue_on_fail
         self.message_limit = message_limit
         self.token_limit = token_limit
         self.time_limit = time_limit
@@ -209,6 +215,7 @@ def task_with(
     approval: str | list[ApprovalPolicy] | None | NotGiven = NOT_GIVEN,
     epochs: int | Epochs | None | NotGiven = NOT_GIVEN,
     fail_on_error: bool | float | None | NotGiven = NOT_GIVEN,
+    continue_on_fail: bool | None | NotGiven = NOT_GIVEN,
     message_limit: int | None | NotGiven = NOT_GIVEN,
     token_limit: int | None | NotGiven = NOT_GIVEN,
     time_limit: int | None | NotGiven = NOT_GIVEN,
@@ -245,6 +252,8 @@ def task_with(
             (default); `False` to never fail on sample errors; Value between 0 and 1
             to fail if a proportion of total samples fails. Value greater than 1 to fail
             eval if a count of samples fails.
+        continue_on_fail: `True` to continue running and only fail at the end if the `fail_on_error` condition is met.
+            `False` to fail eval immediately when the `fail_on_error` condition is met (default).
         message_limit: Limit on total messages used for each sample.
         token_limit: Limit on total tokens used for each sample.
         time_limit: Limit on clock time (in seconds) for samples.
@@ -290,6 +299,8 @@ def task_with(
         task.epochs_reducer = epochs.reducer if epochs else None
     if not isinstance(fail_on_error, NotGiven):
         task.fail_on_error = fail_on_error
+    if not isinstance(continue_on_fail, NotGiven):
+        task.continue_on_fail = continue_on_fail
     if not isinstance(message_limit, NotGiven):
         task.message_limit = message_limit
     if not isinstance(token_limit, NotGiven):
@@ -408,3 +419,17 @@ def resolve_scorer(scorer: Scorer | list[Scorer] | None) -> list[Scorer] | None:
     return (
         scorer if isinstance(scorer, list) else [scorer] if scorer is not None else None
     )
+
+
+def resolve_scorer_metrics(
+    scorers: list[Scorer] | None, metrics: list[Metric] | dict[str, list[Metric]] | None
+) -> list[Scorer] | None:
+    if scorers is not None and metrics is not None:
+        for scorer in scorers:
+            scorer_info = registry_info(scorer)
+            new_metadata = {**scorer_info.metadata, "metrics": metrics}
+            new_info = RegistryInfo(
+                type=scorer_info.type, name=scorer_info.name, metadata=new_metadata
+            )
+            set_registry_info(scorer, new_info)
+    return scorers

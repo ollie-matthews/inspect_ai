@@ -1,16 +1,137 @@
 ## Unreleased
 
+- Eval logs: Option to resolve attachments for `convert_eval_logs()`.
+- Model grading: `model_graded_qa()`, `model_graded_fact()`) now look for the "grader" model-role by default.
+- Human agent: Enable installation even when default tool user is not root.
+- Hooks: Propagate LimitExceededError so that hooks can raise limit errors.
+- Bugfix: Fix Google Gemini 2.5 function calling configuration error when using native search tools.
+
+
+## 0.3.132 (12 September 2025)
+
+- Anthropic: Support for images with mime type image/bmp.
+- Sandbox Service: Specify instance externally so a single script can service multiple instances.
+- Agent Bridge: Capture message history in agent state for all bridge generations.
+- Agent Bridge: Embed sandbox service client in sandbox bridge proxy (for ease of bundling).
+- Agent Bridge: Respect `store=False` from bridge client and don't insist on `id` being included with reasoning (as it is not returned in `store=False` mode).
+- Sandboxes: Add Sandbox Injection API for Dynamic Environment Setup.
+- Scoring: Resolve task or eval level metrics onto scorers immediately rather than waiting until scoring.
+- Logging: Flush log more frequently for very small numbers of samples.
+- Model Roles: Support specifying model roles on the CLI with config and model args (via YAML or JSON).
+- Inspect View: Add support for cmd + arrow up/down to navigate the samples list.
+- Inspect View: Improve scroll keyboard handling in sample transcript view.
+- Inspect View: Improve scroll keyboard handling in sample messages view.
+- Inspect View: Improve find support within sample list, transcript, and messages.
+- Inspect View: Fix issue that would result in `attachments:/` appearing in content when viewing running samples.
+- Bugfix: Fix file info on filesystem without mtime.
+- Bugfix: Correct rendering of tool call errors in running samples transcript.
+- Bugfix: Use AzureAI token provider even when no API key is available.
+- Bugfix: Ensure that assistant content without reasoning is always passed to responses API.
+  
+## 0.3.131 (08 September 2025)
+
+- OpenAI: Correct serialization of web search tool calls (prevent 400 errors).
+
+## 0.3.130 (06 September 2025)
+
+- Agent Bridge: Option to force the sandbox agent bridge to use a specific model.
+- Agent Bridge: New `filter` option to enable bridge to filter model generate calls.
+- Agent Bridge: Ensure that Anthropic can't yield an empty system parameter.
+- Agent Bridge: Increase polling interval for sandbox agent bridge to 2 seconds (was 0.2 seconds).
+- OpenAI Compatible: Add support for using Responses API via `responses_api` model arg.
+- Eval Set: Enable running additional epochs against an already completed eval set.
+- Eval Set: Add `eval_set_id` to log file (unique id for eval set across invocations for the same `log_dir`).
+- Eval Retry: Use the same `log_format` as the log which is being retried.
+- Task Display: Render tool outputs based on model events rather than tool events (compatible w/ external tool calling e.g. for agent bridge).
+- Sandbox Service: Don't emit sandbox events for sandbox service RPC calls.
+- Hooks: New `EvalSetStart` and `EvalSetEnd` hook methods.
+- Scoring: `inspect score` now supports streaming via the `--stream` argument.
+- Inspect View: Starting the view server with a path to a specific log file will automatically open that log file (if it exists) rather than showing the log list.
+- Inspect View: Improve sample scoring detail layout
+- Inspect View: Reduce h1-h6 heading sizes
+- Inspect View: Fix error that caused 'json too large' message to appear incorrectly for sample JSON.
+- Inspect View: Improve filtering of log files in log list (improve performance and loading progress).
+- Inspect View: Add cmd+F shortcut for filtering log in log list.
+- Inspect View: Fix regression in tool input syntax highlighting.
+- Inspect View: Focus transcript or messages when sample dialog is loaded, allowing use of keyboard shortcuts like cmd + arrow down for scrolling.
+- Inspect View: Focus log list when the log list is shown, allowing use of keyboard shortcuts like cmd + F.
+- Bugfix: Ensure ETags always match content when reading S3 logs to prevent write conflicts.
+
+## 0.3.129 (03 September 2025)
+
+- Agent Bridge: Don't use `concurrency()` for agent bridge interactions (not required for long-running proxy server or cheap polling requests).
+- Sandboxes: Add `concurrency` parameter to `exec()` to advise whether the execution should be subject to local process concurrency limits.
+
+## 0.3.128 (02 September 2025)
+
+- Agent Bridge: Correctly dispatch LimitExceededError which occurs during proxied model calls.
+- Agent Bridge: Respect reference vs. value semantics of agent caller (enables preservation of messages when agent is run via `as_solver()`).
+- OpenAI: Update types to match `openai` v1.104.1 (which is now the minimum required version).
+- Mistral: Support for updated use of `ThinkChunk` types in mistralai v1.9.10.
+- Groq: Support for `--reasoning-effort` parameter (works w/ gpt-oss models).
+- Scoring: Use fallback unicode numeric string parser when default `str_to_float()` fails.
+- Bugfix: Work around OpenAI breaking change that renamed "find" web search action to "find_in_page" (bump required version of `openai` package to v1.104.0).
+
+## 0.3.127 (01 September 2025)
+
+- Bugfix: Preserve sample list state (e.g. scroll position, selection) across sample open/close.
+
+## 0.3.126 (01 September 2025)
+
+- Agent Bridge: OpenAI Responses API and Anthropic API are now supported alongside the OpenAI Completions API for both in-process and sandbox-based agent bridges.
+- Agent Bridge: Bridge can now automatically keep track of `AgentState` changes via inspecting model traffic running over the bridge.
+- Agent Bridge: Improved id stability across generations to prevent duplicated messages in `messages_df()`.
+- Agent Bridge: Ensure that explicitly specified `GenerateConfig` values for models override bridged agent config.
+- Agent `handoff()`: Use `content_only()` filter by default for handoff output and improve detection of new content from handed off to agents. 
+- Model API: Refine available tool types for `ContentToolUse` ("web_search" or "mcp_call")
+- Model API: Remove `internal` field from `ChatMessageBase` (no longer used).
+- OpenAI: Added `responses_store` model arg for explicitly enabling or disabling the responses API.
+- Google: Pass tool parameter descriptions for nullable and `enum` typed fields.
+- Google: Support `thought_signature` for thought parts.
+- Google: Use role="user" for tool call results rather than role="function".
+- MCP: Export MCP server configuration types (`MCPServerConfig` and Stdio and HTTP variants).
+- Sandbox Service: New `instance` option for multiple services of the same type in a single container.
+- Sandbox Service: New `polling_interval` option for controlling polling interval from sandbox to scaffold (defaults to 2 seconds, overridden to 0.2 seconds for Docker sandbox).
+- ReAct Agent: Add submit tool content to assistant message (in addition to setting the `completion`).
+- Metrics: Compute metrics when an empty list of reducers is provided (do not reduce the scores before computing metrics). Add `--no-epochs-reducer` CLI flag for specifying no reducers.
+- Scoring: Make `match` more lenient when numeric matches container markdown formatting.
+- Concurrency: Add `visible` option for `concurrency()` contexts to control display in status bar.
+- Inspect View: Add support for filtering sample transcripts by event types. Be default, filter out `sample_init`, `sandbox`, `store`, and `state` events.
+- Inspect View: Add support for displaying raw markdown source when viewing sample data.
+- Inspect View: Remove sample list / title content when sample is displaying (prevents find from matching content behind the sample detail).
+- Inspect View: Custom rendering for TodoWrite tool calls.
+- Bugfix: Fix error in reducing scores when all scores for a sample are NaN.
+- Bugfix: Correctly extract authorization token from header in MCP remote server config.
+
+## 0.3.125 (25 August 2025)
+
+- Scoring: Refactor `inspect score` to call same underlying code as `score()`.
+- Bugfix: Fix regression in CLI scoring.
+
+## 0.3.124 (24 August 2025)
+
 - Agent Bridge: New context-manager based `agent_bridge()` that replaces the deprecated `bridge()` function.
 - Agent Bridge: `sandbox_agent_bridge()` to integrate with CLI based agents running inside sandboxes.
 - Agent Bridge: Inspect model roles can now be addressed by bridged agents (e.g. "inspect/red-team").
+- ReAct Agent: Allow for a ToolDef to be passed to an AgentSubmit type.
 - Model API: `user_prompt()` function for getting the last user message from a list of messages.
 - Model API: `messages_to_openai()` and `messages_from_openai()` functions for converting to and from OpenAI-style message dicts.
+- Groq: Support `response_schema` option for providing a JSON schema for model output.
 - VLLM: Allow specifying the port when starting up a new vllm server.
 - Eval Log: For sample summaries, preserve all sample and score fields that are less than 1k in size.
+- CLI: Yield error exit code (1) if no tasks to evaluate are found at the specified path.
+- Eval Set: You can now run eval sets in log dirs containing unrelated eval log files using the `--log-dir-allow-dirty` option.
+- Add `--continue-on-fail` option for `eval()` and `eval_set()`.
+- Scoring: Add `copy` option to `score_async()` (defaults to `True`) to control whether the log is deep copied before scoring.
 - Inspect View: Convert samples in the sample list to use simple a tags for navigation. This allows typical user gestures like cmd+click to work correctly.
 - Inspect View: Update document titles when viewing a sample, log, or log dir to better disambiguate tabs or windows. Use reverse pyramid to place details at the head of the title.
+- Inspect View: Increase sample size limit to 100MB (samples larger than that are not browsable in the viewer).
 - Bugifx: Properly handle surrogates in JSON serialization.
+- Bugfix: Google and Mistral providers now generate unique tool call IDs to prevent collisions when calling the same tool multiple times.
 - Bugfix: Enable use of custom reducers with `eval-retry` by delaying their creation until after task creation.
+- Bugfix: Fix custom json schema generation code for `CitationBase` so that it no longer leads to an invalid schema.
+- Bugfix: Only pass `background` to OpenAI Responses if specified.
+- Bugfix: Do not pass unsupported `tool_choice` to Anthropic thinking models.
 
 ## 0.3.123 (16 August 2025)
 
@@ -154,6 +275,7 @@
 - Scoring: Add `display` parameter to `score()` to control display type.
 - Scoring: Nan values returned from scorers will be excluded from computation of metrics. Scorers in results include `scored_samples` and `unscored_samples` fields to indicate how many samples were scored and how many were not. The viewer will display these values if there are unscored samples.
 - Eval Log: Protect against removing excessive numbers of samples at once from realtime database.
+- Eval Log: Add `--resolve-attachments` option to `inspect log dump`.
 - Hooks: Provide full `EvalSample` (rather than only the summary) to `on_sample_end()` hook.
 - Inspect View: Compatiblility for sites published to GitHub Pages for `inspect view bundle`.
 - Inspect View: The bundle produced for deployment now includes a much more compact manifest, improving support for bundling large numbers of files.

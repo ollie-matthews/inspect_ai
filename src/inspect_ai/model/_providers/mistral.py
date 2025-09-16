@@ -42,6 +42,7 @@ from mistralai.models import UserMessage as MistralUserMessage
 from mistralai.models.chatcompletionresponse import (
     ChatCompletionResponse as MistralChatCompletionResponse,
 )
+from shortuuid import uuid
 from typing_extensions import override
 
 # TODO: Migration guide:
@@ -411,11 +412,19 @@ async def mistral_message_content(
 
 def mistral_system_message_content(
     content: str | list[Content],
-) -> str | list[TextChunk]:
+) -> str | list[TextChunk | ThinkChunk]:
     if isinstance(content, str):
         return content or NO_CONTENT
     else:
-        return [TextChunk(text=c.text) for c in content if isinstance(c, ContentText)]
+        message_content: list[TextChunk | ThinkChunk] = []
+        for c in content:
+            if isinstance(c, ContentText):
+                message_content.append(TextChunk(text=c.text))
+            elif isinstance(c, ContentReasoning):
+                message_content.append(
+                    ThinkChunk(thinking=[TextChunk(text=c.reasoning)])
+                )
+        return message_content
 
 
 async def mistral_content_chunk(content: Content) -> ContentChunk:
@@ -428,7 +437,7 @@ async def mistral_content_chunk(content: Content) -> ContentChunk:
         # return chunk
         return ImageURLChunk(image_url=ImageURL(url=image_url, detail=content.detail))
     elif isinstance(content, ContentReasoning):
-        raise TypeError("Mistral models use <think> tags for reasoning.")
+        return ThinkChunk(thinking=[TextChunk(text=content.reasoning)])
     else:
         raise RuntimeError(
             "Mistral models do not support audio, video, and document inputs."
@@ -454,7 +463,7 @@ def chat_tool_calls(
 
 
 def chat_tool_call(tool_call: MistralToolCall, tools: list[ToolInfo]) -> ToolCall:
-    id = tool_call.id or tool_call.function.name
+    id = tool_call.id or f"{tool_call.function.name}_{uuid()}"
     if isinstance(tool_call.function.arguments, str):
         return parse_tool_call(
             id, tool_call.function.name, tool_call.function.arguments, tools
@@ -524,7 +533,13 @@ def completion_content_chunks(content: ContentChunk) -> list[Content]:
                     detail = "auto"
             return [ContentImage(image=content.image_url.url, detail=detail)]
     elif isinstance(content, ThinkChunk):
-        raise TypeError("Mistral models use <think> tags for reasoning.")
+        return [
+            ContentReasoning(
+                reasoning="\n".join(
+                    t.text for t in content.thinking if isinstance(t, TextChunk)
+                )
+            )
+        ]
     elif isinstance(content, AudioChunk):
         raise TypeError("AudioChunk content is not supported by Inspect.")
 

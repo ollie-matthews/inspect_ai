@@ -1,75 +1,99 @@
 import contextlib
-from dataclasses import dataclass
 from logging import getLogger
 from pathlib import Path
 from typing import AsyncIterator
 
 import anyio
+from shortuuid import uuid
 
+from inspect_ai.agent._bridge.sandbox.types import SandboxAgentBridge
+from inspect_ai.model._model import GenerateFilter
+from inspect_ai.tool._tools._web_search._web_search import (
+    WebSearchProviders,
+)
 from inspect_ai.util._anyio import inner_exception
 from inspect_ai.util._sandbox import SandboxEnvironment
 from inspect_ai.util._sandbox import sandbox as default_sandbox
 
-from .service import run_model_service
+from ..._agent import AgentState
+from ..util import internal_web_search_providers
+from .service import MODEL_SERVICE, run_model_service
 
 logger = getLogger(__file__)
 
 
-@dataclass
-class SandboxAgentBridge:
-    """Sandbox agent bridge."""
-
-    port: int
-    """Model proxy server port."""
-
-
 @contextlib.asynccontextmanager
 async def sandbox_agent_bridge(
-    sandbox: SandboxEnvironment | None = None, port: int = 13131
+    state: AgentState | None = None,
+    *,
+    model: str | None = None,
+    filter: GenerateFilter | None = None,
+    sandbox: SandboxEnvironment | None = None,
+    port: int = 13131,
+    web_search: WebSearchProviders | None = None,
 ) -> AsyncIterator[SandboxAgentBridge]:
     """Sandbox agent bridge.
 
-    ::: callout-note
-    The `sandbox_agent_bridge()` function is available only in the development version of Inspect. To install the development version from GitHub:
-
-    ``` bash
-    pip install git+https://github.com/UKGovernmentBEIS/inspect_ai
-    ```
-    :::
-
     Provide Inspect integration for agents running inside sandboxes. Runs
-    an OpenAI-compatible proxy server in the container -- this proxy server
+    a proxy server in the container that provides REST entpoints for the OpenAI Completions API, OpenAI Responses API, and Anthropic API. This proxy server
     runs on port 13131 and routes requests to the current Inspect model provider.
 
-    You should set `OPENAI_BASE_URL=http://localhost:13131/v1` when executing
+    You should set `OPENAI_BASE_URL=http://localhost:13131/v1` or `ANTHROPIC_BASE_URL=http://localhost:13131` when executing
     the agent within the container and ensure that your agent targets the
-    model name "inspect" when calling OpenAI. Use "inspect/<full-model-name>"
-    to target other Inspect model providers.
+    model name "inspect" when calling OpenAI or Anthropic. Use "inspect/<full-model-name>" to target other Inspect model providers.
 
     Args:
+        state: Initial state for agent bridge. Used as a basis for yielding
+            an updated state based on traffic over the bridge.
+        model: Force the bridge to use a speicifc model (e.g. "inspect" to force the
+            the default model for the task or "inspect/openai/gpt-4o" to force
+            another specific model).
+        filter: Filter for bridge model generation.
         sandbox: Sandbox to run model proxy server within.
         port: Port to run proxy server on.
+        web_search: Configuration for mapping model internal
+            web_search tools to Inspect. By default, will map to the
+            internal provider of the target model (supported for OpenAI,
+            Anthropic, Gemini, Grok, and Perplxity). Pass an alternate
+            configuration to use to use an external provider like
+            Tavili or Exa for models that don't support internal search.
     """
+    # instance id for this bridge
+    instance = f"proxy_{uuid()}"
+
     # resolve sandbox
     sandbox = sandbox or default_sandbox()
+
+    # resolve web search config
+    web_search = web_search or internal_web_search_providers()
+
+    # create a state value that will be used to track mesages going over the bridge
+    state = state or AgentState(messages=[])
 
     try:
         async with anyio.create_task_group() as tg:
             # event to signal startup of model service
             started = anyio.Event()
 
+            # create the bridge
+            bridge = SandboxAgentBridge(
+                state=state, filter=filter, port=port, model=model
+            )
+
             # sandbox service that receives model requests
-            tg.start_soon(run_model_service, sandbox, started)
+            tg.start_soon(
+                run_model_service, sandbox, web_search, bridge, instance, started
+            )
 
             # proxy server that runs in container and forwards to sandbox service
-            tg.start_soon(run_model_proxy, sandbox, port, started)
+            tg.start_soon(run_model_proxy, sandbox, port, instance, started)
 
             # ensure services are up
             await anyio.sleep(0.1)
 
             # main agent
             try:
-                yield SandboxAgentBridge(port)
+                yield bridge
             finally:
                 tg.cancel_scope.cancel()
     except Exception as ex:
@@ -77,7 +101,7 @@ async def sandbox_agent_bridge(
 
 
 async def run_model_proxy(
-    sandbox: SandboxEnvironment, port: int, started: anyio.Event
+    sandbox: SandboxEnvironment, port: int, instance: str, started: anyio.Event
 ) -> None:
     # wait for model service to be started up
     await started.wait()
@@ -94,7 +118,11 @@ async def run_model_proxy(
         )
 
     # run the model proxy script
-    result = await sandbox.exec([MODEL_PROXY_PY, str(port)])
+    result = await sandbox.exec(
+        cmd=[MODEL_PROXY_PY, str(port), instance],
+        env={f"{MODEL_SERVICE.upper()}_INSTANCE": instance},
+        concurrency=False,
+    )
     if not result.success:
         raise RuntimeError(
             f"Error running model proxy script for agent bridge: {result.stderr}"
